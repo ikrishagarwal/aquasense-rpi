@@ -1,0 +1,2 @@
+# M0 scaffold is stdlib-only. YAML parser reserved for M1.
+PyYAML==6.0.3

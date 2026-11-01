@@ -1,0 +1,2 @@
+# Optional transport; API checked against Paho v2 docs, live broker test pending.
+paho-mqtt==2.1.0

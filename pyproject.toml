@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aquasense-pi"
+version = "0.0.1"
+description = "Offline-first purifier controller with deterministic simulation"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+mqtt = ["paho-mqtt==2.1.0"]
+vision = ["cryptography==50.0.2"]
+config = ["PyYAML==6.0.3"]
+dev = [
+  "PyYAML==6.0.3",
+  "pytest==9.0.2",
+  "ruff==0.14.10",
+  "mypy==1.19.1",
+  "types-PyYAML==6.0.12.20250915",
+]
+
+[tool.setuptools.packages.find]
+include = ["purifier*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit", "tests/simulation", "tests/integration"]
+addopts = "-ra --strict-markers"
+markers = ["hardware: requires separately verified physical bench; never default"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true

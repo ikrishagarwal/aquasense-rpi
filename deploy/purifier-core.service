@@ -1,0 +1,36 @@
+[Unit]
+Description=AquaSense core controller (simulation profile)
+After=local-fs.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=purifier
+Group=purifier-ipc
+WorkingDirectory=/opt/aquasense
+ExecStart=/opt/aquasense/.venv/bin/python -m purifier --config /etc/purifier/simulation.yaml
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGTERM
+UMask=0077
+StateDirectory=purifier
+StateDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/purifier
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=60
+
+[Install]
+WantedBy=multi-user.target

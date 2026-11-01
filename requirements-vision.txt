@@ -1,0 +1,3 @@
+# Encryption verified on this host. ARM64 installation remains to be verified.
+cryptography==50.0.2
+# No model/runtime selected. Picamera2/libcamera must match the Raspberry Pi OS.

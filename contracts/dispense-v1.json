@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "event_id": "00000000-0000-4000-8000-000000000002",
+  "revision": 1,
+  "user_id": "guest",
+  "start_ts": "2026-11-01T00:00:00+00:00",
+  "end_ts": "2026-11-01T00:00:00+00:00",
+  "volume_ml": 2.2222222222222223,
+  "pulse_count": 1,
+  "temperature_c": null,
+  "tds_in": null,
+  "tds_out": null,
+  "ph_approx": null,
+  "sensor_quality": {
+    "temperature_c": "sensor_error",
+    "tds_in": "sensor_error",
+    "tds_out": "sensor_error",
+    "ph_approx": "sensor_error"
+  },
+  "confidence": null,
+  "recognition_status": "unknown",
+  "volume_quality": "uncalibrated",
+  "incomplete": false,
+  "quality_flags": [],
+  "device_id": "00000000-0000-4000-8000-000000000001"
+}

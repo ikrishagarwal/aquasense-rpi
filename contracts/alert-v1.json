@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "device_id": "00000000-0000-4000-8000-000000000001",
+  "event_id": "00000000-0000-4000-8000-000000000002",
+  "revision": 1,
+  "type": "alert",
+  "name": "outlet_tds_high",
+  "active": true,
+  "timestamp": "2026-11-01T00:00:00Z"
+}

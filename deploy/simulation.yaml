@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "mode": "simulation",
+  "device_id": null,
+  "hardware_verified": false,
+  "pins_bcm": {
+    "flow": 17,
+    "temperature": 4,
+    "tank_float": 27,
+    "proximity": 22,
+    "drain_driver": 23,
+    "illumination": 24,
+    "shutter": 25,
+    "i2c_sda": 2,
+    "i2c_scl": 3
+  },
+  "drain": {
+    "enabled": false,
+    "driver_active_high": null,
+    "physical_enable_pin_bcm": null,
+    "independent_cutoff_verified": false,
+    "max_on_s": null,
+    "quiet_period_s": null
+  },
+  "flow": {
+    "pulses_per_litre": 450.0,
+    "calibrated": false,
+    "merge_timeout_s": 3.0,
+    "max_session_s": 300.0
+  },
+  "sensors": {
+    "adc_address": null,
+    "adc_supply_v": 3.3,
+    "adc_channels": {
+      "tds_in": 0,
+      "tds_out": 1,
+      "ph_approx": 2
+    },
+    "tds_poll_s": 2.0,
+    "temperature_poll_s": 5.0,
+    "ph_poll_s": 10.0,
+    "tds_calibration": null,
+    "ph_calibration": null,
+    "float_ok_level": null,
+    "float_debounce_s": null,
+    "shutter_open_level": null
+  },
+  "vision": {
+    "enabled": false,
+    "deadline_s": 5.0,
+    "burst_frames": 3,
+    "width": 640,
+    "height": 480,
+    "threads": 1,
+    "max_pending": 1,
+    "camera_orientation": null,
+    "model_path": null,
+    "socket_path": "/run/purifier-vision/worker.sock"
+  },
+  "mqtt": {
+    "enabled": false,
+    "broker": null,
+    "verify_tls": true,
+    "telemetry_s": 15.0,
+    "outbox_batch_size": 20,
+    "port": 8883,
+    "ca_file": null,
+    "username_env": "AQUASENSE_MQTT_USERNAME",
+    "password_env": "AQUASENSE_MQTT_PASSWORD"
+  },
+  "storage": {
+    "path": "/var/lib/purifier/core.sqlite3",
+    "writer_queue_capacity": 128,
+    "synchronous": "FULL"
+  },
+  "alerts": {
+    "tds_out_threshold_ppm": null,
+    "filter_capacity_litres": null,
+    "filter_alert_fraction": 0.9,
+    "tds_hysteresis_ppm": null,
+    "debounce_readings": 2
+  }
+}
