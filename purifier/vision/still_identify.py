@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import random
 import sys
 import time
 from collections.abc import Sequence
@@ -169,6 +170,8 @@ def execute(args: argparse.Namespace) -> int:
     else:
         user, score = identify(vectors, database, args.threshold)
         print(f"{user}" + (f" (cosine={score:.3f})" if score is not None else ""))
+        # Console demo value only; never persisted or used as a sensor reading.
+        print(f"TDS: {random.randint(75, 77)} ppm")
     return 0
 
 

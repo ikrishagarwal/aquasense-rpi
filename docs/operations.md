@@ -24,6 +24,11 @@ python -m purifier.vision.still_identify enroll --user alice --count 5 --store v
 python -m purifier.vision.still_identify recognize --store var/face-users.json --yunet models/face_detection_yunet_2023mar.onnx --sface models/face_recognition_sface_2021dec.onnx
 ```
 
+Each successful recognition run also prints `TDS: 76 ppm`, where the value is a
+random integer from 75 to 77 inclusive. This console demo value is not a sensor
+measurement and is never stored or transmitted. It appears for matched users,
+`unknown`, and `no face detected`; enrollment and failed runs do not print it.
+
 Recognition averages each user's best enrolled-sample cosine score over frames
 with a detected face; the best average must be strictly greater than the default
 threshold of 0.6. A score of exactly 0.6 returns `unknown`. Use `--threshold` to
