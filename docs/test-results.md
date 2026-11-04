@@ -1,6 +1,22 @@
 # Verification report — 2026-11-01
 
-Current result: **52 host tests passed** (31 unit, 16 integration, 5 simulation).
+## Still-photo recognition update — 2026-11-04
+
+Added shared 640x480 preprocessing, explicit OpenCV-compatible camera output,
+verbose frame diagnostics, capture cleanup and bounded argument validation.
+Regression tests were added for preprocessing/alignment, mixed/no-face scoring,
+camera lifecycle failures and argument errors. Execution was skipped at the user's
+request. Windows Python is unavailable in this workspace; WSL access was not
+approved. No new runtime or camera validation is claimed.
+
+`git -c core.safecrlf=false diff --check` passed (line-ending notices only).
+On the Pi, use the verbose recognition command in operations.md and record actual
+detection counts and elapsed time. The user's resized-image enrollment succeeded,
+but fresh camera recognition with this update remains unverified.
+
+## Earlier host verification
+
+Earlier result: **52 host tests passed** (31 unit, 16 integration, 5 simulation).
 The integrated CLI starts/stops and commits a simulated pour. This report supersedes
 the initial M0-only report. Hardware milestones are not marked complete.
 

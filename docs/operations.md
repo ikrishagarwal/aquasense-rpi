@@ -30,6 +30,38 @@ and are not intentionally saved. The JSON embedding store contains biometric dat
 keep it private and delete it when no longer needed. This prototype has not been
 benchmarked or accuracy-validated on a Pi 3 B+.
 
+The still stream explicitly requests 640x480 with Picamera2 `RGB888` (BGR byte
+order in the captured array, as OpenCV expects). Loaded images are also resized
+to 640x480 before detection and alignment. This matches the resized images that
+successfully enrolled on the user's Pi. Existing enrollment files remain usable.
+
+After updating the project on the Pi, run a fresh five-photo burst with diagnostics:
+
+```sh
+cd /home/pi/aquasense-rpi
+. .venv-vision/bin/activate
+python -m purifier.vision.still_identify recognize --store var/face-users.json --yunet models/face_detection_yunet_2023mar.onnx --sface models/face_recognition_sface_2021dec.onnx --verbose
+```
+
+`--verbose` also works for enrollment. It prints each frame's processed dimensions
+and detected face count, the total usable frames, and total elapsed seconds to
+stderr. The recognition result remains on stdout. It never saves frames or prints
+embeddings. A camera/model failure exits with an error; successful inference with
+no detected faces returns `no face detected`.
+
+To copy only the updated CLI from the Windows workspace, run this in PowerShell
+on the PC (replace the SSH hostname if needed):
+
+```powershell
+scp F:/hackathons/aquasense/aquasense-rpi/purifier/vision/still_identify.py pi@raspberrypi:/home/pi/aquasense-rpi/purifier/vision/still_identify.py
+```
+
+Capture count is bounded to 1..10 for recognition and 5..10 for enrollment;
+recognition defaults to five photos separated by 0.4 seconds after a one-second
+camera warm-up. Delays must be finite and nonnegative. Enrollment still requires
+a detected face in every supplied image and leaves the previous enrollment intact
+on detection failure. Retry with `--verbose` to locate missed frames.
+
 Hardware mode is deliberately rejected. The integrated core is simulation-only;
 MQTT transport can be explicitly enabled for a matching test backend. Vision IPC
 is implemented but the core privacy gate remains closed without verified proximity
