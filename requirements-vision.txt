@@ -1,3 +1,5 @@
-# Encryption verified on this host. ARM64 installation remains to be verified.
+# Install these in the vision environment. Picamera2/libcamera come from Raspberry Pi OS apt packages.
+opencv-python-headless>=4.8,<5
+numpy>=1.24
 cryptography==50.0.2
-# No model/runtime selected. Picamera2/libcamera must match the Raspberry Pi OS.
+# YuNet and SFace ONNX models are downloaded separately from OpenCV Zoo.

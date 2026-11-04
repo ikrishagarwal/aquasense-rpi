@@ -11,7 +11,7 @@ dependencies = []
 
 [project.optional-dependencies]
 mqtt = ["paho-mqtt==2.1.0"]
-vision = ["cryptography==50.0.2"]
+vision = ["cryptography==50.0.2", "opencv-python-headless>=4.8,<5", "numpy>=1.24"]
 config = ["PyYAML==6.0.3"]
 dev = [
   "PyYAML==6.0.3",
