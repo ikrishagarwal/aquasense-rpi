@@ -1,5 +1,35 @@
 # Running and operating the current implementation
 
+## One-shot local face identification (prototype)
+
+This standalone CLI takes still photos only; it does not use a continuous preview
+or connect to dispense recognition. Install Picamera2 from the matching Raspberry
+Pi OS repository (`sudo apt install python3-picamera2`), then install NumPy and
+OpenCV headless in an environment that can see the OS camera bindings:
+
+```sh
+python3 -m venv --system-site-packages .venv-vision
+. .venv-vision/bin/activate
+python -m pip install 'numpy>=1.24' 'opencv-python-headless>=4.8,<5'
+```
+
+Download `face_detection_yunet_2023mar.onnx` and
+`face_recognition_sface_2021dec.onnx` from the corresponding model folders in
+the OpenCV Zoo GitHub repository and place them in a private local model folder.
+Enroll using 5–10 images (omit `--images` to capture them, or supply image paths),
+then recognize a five-photo burst:
+
+```sh
+python -m purifier.vision.still_identify enroll --user alice --count 5 --store var/face-users.json --yunet models/face_detection_yunet_2023mar.onnx --sface models/face_recognition_sface_2021dec.onnx
+python -m purifier.vision.still_identify recognize --store var/face-users.json --yunet models/face_detection_yunet_2023mar.onnx --sface models/face_recognition_sface_2021dec.onnx
+```
+
+Recognition averages each user's best enrolled-sample cosine score over frames
+with a detected face; default threshold is 0.363. Raw captures are held in memory
+and are not intentionally saved. The JSON embedding store contains biometric data:
+keep it private and delete it when no longer needed. This prototype has not been
+benchmarked or accuracy-validated on a Pi 3 B+.
+
 Hardware mode is deliberately rejected. The integrated core is simulation-only;
 MQTT transport can be explicitly enabled for a matching test backend. Vision IPC
 is implemented but the core privacy gate remains closed without verified proximity
