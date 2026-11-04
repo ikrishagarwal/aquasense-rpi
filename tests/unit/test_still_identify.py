@@ -53,9 +53,18 @@ class StillIdentifyTests(unittest.TestCase):
                    if v is not None]
         self.assertEqual(cli.identify(vectors, samples), ('alice', 1.0))
         self.assertEqual(cli.identify([], samples), ('no face detected', None))
-        self.assertEqual(cli.identify(vectors, samples, 1.0)[0], 'alice')
+        self.assertEqual(cli.identify(vectors, samples, 1.0)[0], 'unknown')
         self.assertEqual(cli.identify([np.array([-1., 0.])],
                                       {'alice': [[1, 0]]})[0], 'unknown')
+
+    def test_default_threshold_is_strictly_above_point_six(self):
+        samples = {'alice': [[1., 0.]]}
+        self.assertEqual(cli.DEFAULT_THRESHOLD, .6)
+        # Unit-length query vectors have cosine equal to the first component.
+        for cosine, expected in ((.59, 'unknown'), (.6, 'unknown'), (.61, 'alice')):
+            with self.subTest(cosine=cosine):
+                query = np.array([cosine, np.sqrt(1 - cosine ** 2)])
+                self.assertEqual(cli.identify([query], samples)[0], expected)
 
     def test_camera_format_count_and_failure_cleanup(self):
         for failure in (None, 'configure', 'start', 'capture_array', 'stop'):

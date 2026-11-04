@@ -12,7 +12,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-DEFAULT_THRESHOLD = 0.363
+DEFAULT_THRESHOLD = 0.6
 FRAME_SIZE = (640, 480)
 
 
@@ -64,7 +64,7 @@ def identify(vectors: list[np.ndarray], enrolled: dict[str, list[list[float]]],
     if not averages:
         return "unknown", None
     user, score = max(averages.items(), key=lambda item: item[1])
-    return (user if score >= threshold else "unknown"), score
+    return (user if score > threshold else "unknown"), score
 
 
 def load_images(paths: list[Path]) -> list[np.ndarray]:

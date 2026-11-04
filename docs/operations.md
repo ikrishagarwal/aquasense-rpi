@@ -25,7 +25,9 @@ python -m purifier.vision.still_identify recognize --store var/face-users.json -
 ```
 
 Recognition averages each user's best enrolled-sample cosine score over frames
-with a detected face; default threshold is 0.363. Raw captures are held in memory
+with a detected face; the best average must be strictly greater than the default
+threshold of 0.6. A score of exactly 0.6 returns `unknown`. Use `--threshold` to
+override this cutoff; the comparison remains strict. Raw captures are held in memory
 and are not intentionally saved. The JSON embedding store contains biometric data:
 keep it private and delete it when no longer needed. This prototype has not been
 benchmarked or accuracy-validated on a Pi 3 B+.
