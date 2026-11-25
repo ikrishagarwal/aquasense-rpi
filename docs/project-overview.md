@@ -22,6 +22,15 @@ development tasks.
 
 ## Local Face Identification
 
+The Arduino dispense monitor uses an independent worker for automatic face
+identification. With verified proximity and shutter inputs, it attempts three
+frames starting one second after flow detection. It matches the best usable
+frame against encrypted local enrollments and reports Guest when recognition
+is unavailable or ambiguous. The console summary includes the Arduino TDS
+estimate and measured pour volume. See [the Arduino monitor guide](operations.md#arduino-dispense-monitor).
+
+### One-shot face identification prototype
+
 Face identification uses short, explicitly triggered bursts of still photos.
 There is no continuous monitoring or persistent camera preview. The default
 recognition burst contains five photos, separated by 0.4 seconds after a
@@ -59,8 +68,8 @@ not implement liveness detection or secure identity verification.
 The main controller uses asynchronous coordination for sessions, sensor polling,
 health supervision, and optional network communication. Camera and inference
 dependencies are kept outside the core measurement path. The architecture
-provides a separate vision worker boundary, although the real camera recognition
-component has not yet been connected to automatic dispense identification.
+provides a separate vision worker boundary. The Arduino monitor's real camera
+worker is a standalone path alongside the main controller.
 
 Flow-session software groups closely spaced pulse bursts into one dispense,
 tracks a stable event identifier, and checkpoints active sessions. Monotonic
@@ -92,11 +101,10 @@ driver protection, an accessible stop, and an independent hardware cutoff.
 Software interlocks alone do not establish physical safety.
 
 Camera captures remain in memory and are not intentionally saved or uploaded.
-The current face-identification component stores embeddings in a local JSON file
-with restricted permissions, but those embeddings are not encrypted. A separate
-encrypted enrollment facility exists in the repository; connecting recognition
-to it, including deletion and privacy controls, remains necessary. Biometric
-embeddings require protection even when raw photographs are not retained.
+The Arduino monitor uses encrypted local enrollment and provides deletion.
+The one-shot prototype uses a separate local JSON store with restricted file
+permissions. Biometric embeddings require protection even when raw photographs
+are held only in memory.
 
 ## Current Results and Remaining Work
 
@@ -109,7 +117,7 @@ these results do not validate the subsequent camera changes. Recent regression
 tests were added but not executed at the user's request.
 
 The next steps are live recognition trials, measured latency and memory use,
-encrypted enrollment integration, physical sensor calibration, backend
+verification of the wired privacy inputs, physical sensor calibration, backend
 synchronization tests, and safety validation. A two-to-five-second recognition
 cycle remains a target rather than a measured guarantee. The current deliverable
 combines a functioning saved-image enrollment path with simulated purifier

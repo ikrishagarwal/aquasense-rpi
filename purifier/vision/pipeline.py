@@ -43,10 +43,13 @@ class Pipeline:
     def identify(self, enrolled: Mapping[str, Sequence[Sequence[float]]]) -> Match:
         frames: list[Any] = []
         try:
-            for _ in range(3):
-                if not self.permission().permitted:
-                    return Match('guest', None, 'privacy_blocked')
-                frames.append(self.camera.capture())
+            try:
+                for _ in range(3):
+                    if not self.permission().permitted:
+                        return Match('guest', None, 'privacy_blocked')
+                    frames.append(self.camera.capture())
+            finally:
+                self.camera.close()
             candidates = [(self.model.quality(frame), index) for index, frame in enumerate(frames)]
             valid = [(score, index) for score, index in candidates if score is not None and math.isfinite(score)]
             if not valid or not self.permission().permitted:
@@ -60,4 +63,3 @@ class Pipeline:
             return Match('guest', None, 'unavailable')
         finally:
             frames.clear()
-            self.camera.close()

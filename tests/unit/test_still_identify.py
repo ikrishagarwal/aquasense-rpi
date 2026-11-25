@@ -11,9 +11,46 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from purifier.vision import still_identify as cli
+from purifier.vision.arduino_capture import FaceBurstModel, FaceFrame
 
 
 class StillIdentifyTests(unittest.TestCase):
+    def test_dispense_frame_quality_prefers_sharp_face_and_reuses_detection(self):
+        face = np.array([220, 140, 200, 200], dtype=np.float32)
+        smooth = np.zeros((480, 640, 3), dtype=np.uint8)
+        sharp = smooth.copy()
+        sharp[::2, :, :] = 255
+        model = Mock()
+        model.detect.side_effect = [(smooth, face), (sharp, face)]
+        model.embed_face.return_value = np.array([1.0, 0.0])
+        burst = FaceBurstModel(model)
+        first, second = FaceFrame(smooth), FaceFrame(sharp)
+        first_score = burst.quality(first)
+        second_score = burst.quality(second)
+        assert first_score is not None and second_score is not None
+        self.assertGreater(second_score, first_score)
+        self.assertEqual(burst.embedding(second), [1.0, 0.0])
+        self.assertEqual(model.detect.call_count, 2)
+        image, selection = model.embed_face.call_args.args
+        self.assertIs(image, sharp)
+        self.assertIs(selection, face)
+
+    def test_dispense_camera_checks_privacy_before_starting_fresh_stream(self):
+        camera = Mock()
+        module = SimpleNamespace(Picamera2=Mock(return_value=camera))
+        with patch.dict(sys.modules, {'picamera2': module}):
+            blocked = Mock(side_effect=PermissionError)
+            with self.assertRaises(PermissionError), cli.open_camera(blocked):
+                self.fail("blocked camera opened")
+            module.Picamera2.assert_not_called()
+            allowed = Mock()
+            with cli.open_camera(allowed) as opened:
+                self.assertIs(opened, camera)
+            self.assertEqual(allowed.call_count, 2)
+            camera.create_still_configuration.assert_called_once_with(
+                main={'size': (640, 480), 'format': 'RGB888'}, queue=False)
+            camera.close.assert_called_once()
+
     def test_resize_largest_face_and_alignment_share_coordinates(self):
         small = np.zeros((480, 640, 3), dtype=np.uint8)
         large = np.zeros((1944, 2592, 3), dtype=np.uint8)

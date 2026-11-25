@@ -54,7 +54,22 @@ and illumination are unknown; keep capture disabled until verified.
 - Maximum on-time, quiet period and fresh level requirements from bench validation.
 - Safe collection path and deliberately enabled bench procedure (M8).
 
-No physical GPIO adapter or output initialization is enabled in this implementation. Safety here comes from not opening
-any device and leaving actuator power disconnected. A future physical adapter must implement verified
-fail-safe output initialization before any physical adapter can be used. A profile
-edit alone does not satisfy these gates.
+Keep the drain electronics disconnected. A future drain adapter requires
+verified fail-safe output initialization and the hardware checks above.
+
+## Arduino monitor camera privacy
+
+The standalone Arduino monitor can read two GPIO inputs using GPIO Zero and
+lgpio. Proposed pins are BCM 22 (physical pin 15) for proximity and BCM 25
+(physical pin 22) for shutter state. The monitor measures flow and TDS through
+USB serial. Keep actuator power disconnected during camera verification.
+
+Record the actual sensor and switch variants, supply voltages, ground reference,
+logic levels, active polarities, pull resistors, and camera orientation on the
+bench. Verify each signal is 3.3 V safe before connection. Check that proximity
+reports eligible only for the intended detection area, including sensor warm-up,
+and that the shutter contact reports eligible only when the shutter is open.
+The software selects a pull opposite each input's eligible level. Verify each
+line reads ineligible with the device disconnected, unpowered, and in its
+ineligible state. Resolve any external pull or module output that overrides the
+safe bias before setting `verified` in the Arduino vision JSON.

@@ -6,7 +6,8 @@ import math
 import random
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,11 @@ class FaceModel:
 
     def embedding(self, image: np.ndarray, *, verbose: bool = False,
                   frame_number: int = 1) -> np.ndarray | None:
+        image, face = self.detect(image, verbose=verbose, frame_number=frame_number)
+        return None if face is None else self.embed_face(image, face)
+
+    def detect(self, image: np.ndarray, *, verbose: bool = False,
+               frame_number: int = 1) -> tuple[np.ndarray, np.ndarray | None]:
         if (image.dtype != np.uint8 or image.ndim != 3
                 or image.shape[2] != 3 or image.size == 0):
             raise ValueError("expected a nonempty uint8 BGR image")
@@ -38,8 +44,11 @@ class FaceModel:
             print(f"frame {frame_number}: {width}x{height} BGR, faces={count}",
                   file=sys.stderr)
         if faces is None or len(faces) == 0:
-            return None
+            return image, None
         face = max(faces, key=lambda row: float(row[2] * row[3]))
+        return image, face
+
+    def embed_face(self, image: np.ndarray, face: np.ndarray) -> np.ndarray:
         aligned = self.recognizer.alignCrop(image, face)
         vector = self.recognizer.feature(aligned).reshape(-1).astype(np.float32)
         norm = float(np.linalg.norm(vector))
@@ -78,31 +87,42 @@ def load_images(paths: list[Path]) -> list[np.ndarray]:
     return images
 
 
-def capture_burst(count: int, delay_s: float) -> list[np.ndarray]:
-    if not 1 <= count <= 10 or not math.isfinite(delay_s) or delay_s < 0:
-        raise ValueError("capture requires 1..10 frames and a finite nonnegative delay")
+@contextmanager
+def open_camera(check_permission: Callable[[], None] | None = None) -> Iterator[Any]:
     from picamera2 import Picamera2
 
+    if check_permission is not None:
+        check_permission()
     camera = Picamera2()
-    frames = []
     started = False
     try:
         # Picamera2 RGB888 yields BGR byte order in capture_array for OpenCV.
+        options = {"queue": False} if check_permission is not None else {}
         camera.configure(camera.create_still_configuration(
-            main={"size": FRAME_SIZE, "format": "RGB888"}))
+            main={"size": FRAME_SIZE, "format": "RGB888"}, **options))
+        if check_permission is not None:
+            check_permission()
         camera.start()
         started = True
-        time.sleep(1.0)
-        for index in range(count):
-            frames.append(camera.capture_array("main"))
-            if index + 1 < count:
-                time.sleep(delay_s)
+        yield camera
     finally:
         try:
             if started:
                 camera.stop()
         finally:
             camera.close()
+
+
+def capture_burst(count: int, delay_s: float) -> list[np.ndarray]:
+    if not 1 <= count <= 10 or not math.isfinite(delay_s) or delay_s < 0:
+        raise ValueError("capture requires 1..10 frames and a finite nonnegative delay")
+    frames = []
+    with open_camera() as camera:
+        time.sleep(1.0)
+        for index in range(count):
+            frames.append(camera.capture_array("main"))
+            if index + 1 < count:
+                time.sleep(delay_s)
     return frames
 
 

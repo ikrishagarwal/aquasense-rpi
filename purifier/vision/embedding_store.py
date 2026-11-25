@@ -10,6 +10,12 @@ from uuid import UUID
 from purifier.vision.matcher import normalize
 
 
+def validate_label(label: str) -> None:
+    if (not 1 <= len(label) <= 64 or not label.isprintable()
+            or label.strip() != label or "|" in label or label.casefold() == "guest"):
+        raise ValueError("invalid enrollment label")
+
+
 class EmbeddingStore:
     def __init__(self, directory: Path, key_path: Path, model_id: str, dimension: int) -> None:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -47,7 +53,8 @@ class EmbeddingStore:
         finally:
             os.close(fd)
 
-    def enroll(self, user_id: str, embeddings: list[list[float]]) -> None:
+    def enroll(self, user_id: str, embeddings: list[list[float]], *,
+               label: str | None = None) -> None:
         path = self._path(user_id)
         if not path.exists() and sum(1 for _ in self.directory.glob('*.enc')) >= 100:
             raise ValueError('enrollment capacity reached')
@@ -56,7 +63,12 @@ class EmbeddingStore:
         normalized = [normalize(vector) for vector in embeddings]
         if any(len(vector) != self.dimension for vector in normalized):
             raise ValueError('embedding dimension mismatch')
-        plaintext = json.dumps(normalized, allow_nan=False).encode()
+        if label is not None:
+            validate_label(label)
+        plaintext = json.dumps(
+            normalized if label is None else {"vectors": normalized, "label": label},
+            allow_nan=False,
+        ).encode()
         nonce = os.urandom(12)
         ciphertext = nonce + self._cipher.encrypt(nonce, plaintext, self._aad(user_id))
         fd, temporary = tempfile.mkstemp(dir=self.directory, prefix='.enroll-')
@@ -71,6 +83,9 @@ class EmbeddingStore:
             Path(temporary).unlink(missing_ok=True)
 
     def load(self, user_id: str) -> list[list[float]]:
+        return self.load_labeled(user_id)[0]
+
+    def load_labeled(self, user_id: str) -> tuple[list[list[float]], str | None]:
         path = self._path(user_id)
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         try:
@@ -81,12 +96,19 @@ class EmbeddingStore:
             raise ValueError('invalid enrollment size')
         plaintext = self._cipher.decrypt(data[:12], data[12:], self._aad(user_id))
         vectors = json.loads(plaintext)
+        label = None
+        if isinstance(vectors, dict) and set(vectors) == {"vectors", "label"}:
+            label = vectors["label"]
+            if not isinstance(label, str):
+                raise ValueError("invalid enrollment label")
+            validate_label(label)
+            vectors = vectors["vectors"]
         if not isinstance(vectors, list) or not 3 <= len(vectors) <= 10:
             raise ValueError('invalid enrollment')
         result = [list(normalize(vector)) for vector in vectors]
         if any(len(vector) != self.dimension for vector in result):
             raise ValueError('embedding dimension mismatch')
-        return result
+        return result, label
 
     def delete(self, user_id: str) -> None:
         self._path(user_id).unlink(missing_ok=True)

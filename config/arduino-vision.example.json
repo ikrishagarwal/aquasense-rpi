@@ -1,0 +1,10 @@
+{
+  "yunet": "../models/face_detection_yunet_2023mar.onnx",
+  "sface": "../models/face_recognition_sface_2021dec.onnx",
+  "directory": "../var/arduino-enrollments",
+  "key": "../var/arduino-vision.key",
+  "proximity": null,
+  "shutter": null,
+  "threshold": 0.60,
+  "margin": 0.05
+}

@@ -1,5 +1,26 @@
 # Verification report — 2026-11-01
 
+## Arduino dispense recognition
+
+| Command | Host result |
+|---|---|
+| `python -m unittest discover -s tests/unit -p 'test_arduino*.py' -v` | 14 passed |
+| `PYTHONPATH=/tmp/aquasense-check-deps python -m pytest -q` | 74 passed, 33 subtests passed |
+| `/tmp/aquasense-check-deps/bin/ruff check purifier/arduino_monitor.py purifier/vision/arduino_capture.py purifier/vision/arduino_worker.py tests/unit/test_arduino_monitor.py tests/unit/test_arduino_vision.py` | Passed |
+| `python -m compileall -q purifier tests` | Passed |
+| `git diff --check` | Passed |
+
+The controlled-clock simulation captured three frames at 1.0, 1.4, and 1.8
+seconds from initial flow detection and issued one burst for merged flow. It
+covered shutter closure, ambiguous identification, missing TDS, disconnects,
+stale results, and recovery from a hung subprocess. A CLI run against a Linux
+pseudo-terminal with the example privacy settings emitted a single Guest summary
+for 248.9 mL and 82.0 ppm, then exited cleanly on SIGTERM.
+
+Pi hardware was unavailable. The real camera delay and frame spacing,
+disconnected-input behavior, recognition accuracy, and Arduino volume and TDS
+readings still need bench measurements.
+
 ## Arduino dispense monitor
 
 | Command | Host result |

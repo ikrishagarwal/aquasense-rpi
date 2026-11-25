@@ -23,11 +23,11 @@ class PourMonitorTests(unittest.TestCase):
             (6.5, b"87,0,106.66"),
         ]:
             self.monitor.receive(line, now)
-        self.assertEqual(self.messages, ["Flow started"])
+        self.assertEqual(self.messages, [])
         self.monitor.receive(b"88,0,106.66", 7.0)
         self.monitor.receive(b"89,0,106.66", 7.5)
         self.assertEqual(
-            self.messages, ["Flow started", "Dispensed 6.7 mL | TDS estimate: 88.0 ppm"]
+            self.messages, ["User: Guest | TDS estimate: 88.0 ppm | Dispensed: 6.7 mL"]
         )
 
     def test_new_flow_at_idle_boundary_starts_separate_pour(self) -> None:
@@ -40,10 +40,8 @@ class PourMonitorTests(unittest.TestCase):
         self.assertEqual(
             self.messages,
             [
-                "Flow started",
-                "Dispensed 2.2 mL | TDS estimate: 81.0 ppm",
-                "Flow started",
-                "Dispensed 4.4 mL | TDS estimate: 91.0 ppm",
+                "User: Guest | TDS estimate: 81.0 ppm | Dispensed: 2.2 mL",
+                "User: Guest | TDS estimate: 91.0 ppm | Dispensed: 4.4 mL",
             ],
         )
 
@@ -53,14 +51,17 @@ class PourMonitorTests(unittest.TestCase):
             self.monitor.receive(tds + b",0,2.22", now)
         self.assertEqual(
             self.messages,
-            ["Flow started", "Dispensed 2.2 mL | TDS estimate: unavailable"],
+            ["User: Guest | TDS estimate: unavailable | Dispensed: 2.2 mL"],
         )
 
     def test_missing_tds_preserves_last_valid_reading_of_pour(self) -> None:
         self.monitor.receive(b"80,2.22,2.22", 0.0)
         for now in (0.5, 1.5, 2.5, 3.5):
             self.monitor.receive(b",0,2.22", now)
-        self.assertEqual(self.messages[-1], "Dispensed 2.2 mL | TDS estimate: 80.0 ppm")
+        self.assertEqual(
+            self.messages[-1],
+            "User: Guest | TDS estimate: 80.0 ppm | Dispensed: 2.2 mL",
+        )
 
     def test_corrupt_report_or_timeout_finishes_pour_and_rebaselines(self) -> None:
         cases = [
@@ -85,10 +86,9 @@ class PourMonitorTests(unittest.TestCase):
                 self.assertEqual(
                     messages,
                     [
-                        "Flow started",
-                        f"Incomplete pour ({reason}): 2.2 mL | TDS estimate: 81.0 ppm",
-                        "Flow started",
-                        "Dispensed 4.4 mL | TDS estimate: 83.0 ppm",
+                        "User: Guest | TDS estimate: 81.0 ppm | "
+                        f"Incomplete pour ({reason}): 2.2 mL",
+                        "User: Guest | TDS estimate: 83.0 ppm | Dispensed: 4.4 mL",
                     ],
                 )
 
@@ -104,11 +104,9 @@ class PourMonitorTests(unittest.TestCase):
                 self.assertEqual(
                     messages,
                     [
-                        "Flow started",
-                        "Incomplete pour (Arduino reset or decreasing total): "
-                        "2.2 mL | TDS estimate: 80.0 ppm",
-                        "Flow started",
-                        "Dispensed 4.4 mL | TDS estimate: 82.0 ppm",
+                        "User: Guest | TDS estimate: 80.0 ppm | Incomplete pour "
+                        "(Arduino reset or decreasing total): 2.2 mL",
+                        "User: Guest | TDS estimate: 82.0 ppm | Dispensed: 4.4 mL",
                     ],
                 )
 
@@ -154,8 +152,7 @@ class SerialReaderTests(unittest.TestCase):
         self.assertEqual(
             messages,
             [
-                "Flow started",
-                "Incomplete pour (serial connection lost): "
-                "2.2 mL | TDS estimate: 80.0 ppm",
+                "User: Guest | TDS estimate: 80.0 ppm | "
+                "Incomplete pour (serial connection lost): 2.2 mL",
             ],
         )

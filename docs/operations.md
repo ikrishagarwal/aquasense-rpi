@@ -2,7 +2,7 @@
 
 ## Arduino dispense monitor
 
-Connect the Arduino running the existing flow and TDS sketch to the Pi over USB.
+Connect the Arduino running the flow and TDS sketch to the Pi over USB.
 Close any Arduino Serial Monitor or other program using the same port. List the
 device paths on the Pi and launch the monitor with the matching path.
 
@@ -11,24 +11,23 @@ ls -l /dev/serial/by-id/
 python -m purifier.arduino_monitor --port /dev/ttyACM0
 ```
 
-When available, pass the matching `/dev/serial/by-id/…` path to `--port` so the
-monitor can reopen the device if its numbered port changes after reconnecting.
-If there is no by-ID entry, look for the newly created `/dev/ttyACM*` or
-`/dev/ttyUSB*` device. Run from the project root with Python 3.11 or later on
-Linux and an account with read access to the serial device. The monitor uses the
-standard library at 9600 baud and runs independently of the controller, GPIO,
-database, and network.
+Use the matching `/dev/serial/by-id/…` path when available so the monitor can
+reopen the device if its numbered port changes after reconnecting. Otherwise,
+look for the newly created `/dev/ttyACM*` or `/dev/ttyUSB*` device. Run from the
+project root with Python 3.11 or later on Linux and an account with serial read
+access. The standard-library serial monitor uses 9600 baud. With the command
+above, each pour is reported as Guest and the camera stays off.
 
 ```text
-Flow started
-Dispensed 248.9 mL | TDS estimate: 82.0 ppm
+User: Guest | TDS estimate: 82.0 ppm | Dispensed: 248.9 mL
 ```
 
-The first positive interval starts a pour. The monitor sums reported interval
-volumes and times the idle period from the first zero-flow report. Flow that
-resumes before three seconds is included in the same pour. The total includes
-the latest valid TDS estimate received during the pour, or `TDS estimate:
-unavailable`. TDS alone cannot establish whether the water is safe to drink.
+The first positive interval starts a pour. The monitor sums interval volumes
+and times the idle period from the first zero-flow report. Flow that resumes
+before three seconds is included in the same pour. The summary uses the latest
+valid TDS estimate received during the pour, or displays `TDS estimate: unavailable`
+if no valid reading arrived. TDS alone cannot establish whether the water is safe
+to drink.
 
 A malformed flow report, inconsistent cumulative total, Arduino reset, or
 connection loss during a pour prints `Incomplete pour` with the accepted volume
@@ -36,15 +35,81 @@ so far. Two seconds without a complete serial line also ends an active pour as
 incomplete. The monitor takes a fresh cumulative baseline when reports resume
 and retries disconnected ports once per second. Press Ctrl+C to stop.
 
-Volume uses the sketch's existing calibration of 2.222 mL per pulse. To check
-physical accuracy on the Pi, dispense into a measuring cup, wait for the total,
-and record the cup reading, console total, and their difference in the test
-results. The test command below exercises report handling and Linux serial
-framing with a pseudo-terminal.
+Volume uses the sketch's existing calibration of 2.222 mL per pulse. First run
+the Guest-only command on the Pi. Dispense into a measuring cup and record the
+cup reading, console total, their difference, and the Arduino TDS estimate in
+the test results.
 
 ```sh
-python -m unittest discover -s tests/unit -p test_arduino_monitor.py -v
+python -m unittest discover -s tests/unit -p 'test_arduino*.py' -v
 ```
+
+### Enable automatic face recognition
+
+Install the matching Raspberry Pi OS packages for Picamera2 and GPIO Zero with
+lgpio. Use a virtual environment with access to the system camera and GPIO
+bindings. Download the YuNet 2023mar and SFace 2021dec models specified in the
+example configuration and review their licenses.
+[Picamera2 manual](https://pip-assets.raspberrypi.com/categories/652-raspberry-pi-camera-module-2/documents/RP-008156-DS-7-picamera2-manual.pdf)
+[GPIO Zero pin backends](https://gpiozero.readthedocs.io/en/stable/api_pins.html)
+[YuNet model](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)
+[SFace model](https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface)
+
+```sh
+sudo apt install python3-picamera2 python3-gpiozero python3-lgpio
+python3 -m venv --system-site-packages .venv-vision
+. .venv-vision/bin/activate
+python -m pip install -r requirements-vision.txt
+mkdir -p var
+cp config/arduino-vision.example.json var/arduino-vision.json
+(umask 077; set -C; head -c 32 /dev/urandom > var/arduino-vision.key)
+```
+
+Paths in the JSON resolve from the directory containing it. Confirm the model
+and key paths before use. Keep the key outside the enrollment directory and
+retain it if you want to keep access to existing enrollments. Keep the console
+private because it displays user labels. Keep disk-backed swap disabled for
+capture sessions so raw frames stay out of disk-backed memory.
+
+Complete the privacy input checks in [wiring.md](wiring.md#arduino-monitor-camera-privacy)
+before marking either input verified. Set each wired input to an object containing
+`pin_bcm`, `eligible_high`, and `verified`. Set `verified` to `true` only
+after confirming its wiring and fault behavior. Leave unwired inputs as `null`
+or omit them. The monitor requires both inputs to be marked verified and samples
+them before opening the camera and at each frame.
+
+Stop the monitor while enrolling. Open the verified shutter and remain within
+range of the verified proximity sensor. Enrollment captures three samples by
+default from the purifier camera and saves encrypted embeddings. Keep the UUID for
+re-enrollment or deletion. The optional label appears on the console in place of
+the UUID.
+
+```sh
+user_id="$(python -c 'import uuid; print(uuid.uuid4())')"
+printf '%s\n' "$user_id"
+python -m purifier.vision.arduino_worker --config var/arduino-vision.json enroll --user-id "$user_id" --label alice
+python -m purifier.arduino_monitor --port /dev/ttyACM0 --vision-config var/arduino-vision.json
+# Stop the monitor before deleting the enrollment.
+python -m purifier.vision.arduino_worker --config var/arduino-vision.json delete --user-id "$user_id"
+```
+
+The worker schedules the first 640×480 frame one second after the first positive
+flow report and targets 0.4 seconds between frames. Camera startup can shift
+the first frame later. It embeds the highest-scoring usable face frame and
+requires cosine similarity of at least 0.60 and a lead of at least 0.05 over
+the next enrolled person by default. A completed pour can wait for recognition
+until the five-second deadline from initial flow detection. Serial measurement
+continues throughout. A pour that starts while the only worker is busy reports
+Guest. Interrupted pours print the accepted volume immediately and cancel
+their recognition.
+
+On the bench, test an enrolled pour and a Guest pour, then close the shutter
+during the burst and confirm Guest. Test each disconnected privacy input and
+verify that the camera stays off. Measure the time from first positive report to
+first frame and the inter-frame spacing. Compare several console volumes with
+measuring-cup readings and record results alongside the model and GPIO package
+versions. Physical capture timing, recognition accuracy, and water measurements
+are pending Pi verification.
 
 ## One-shot local face identification (prototype)
 

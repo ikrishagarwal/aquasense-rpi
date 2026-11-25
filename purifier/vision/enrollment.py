@@ -16,7 +16,7 @@ class EnrollmentService:
         self.store, self.camera, self.model = store, camera, model
         self.shutter_open = shutter_open
 
-    def enroll(self, user_id: str, samples: int = 3) -> None:
+    def enroll(self, user_id: str, samples: int = 3, *, label: str | None = None) -> None:
         UUID(user_id)
         if not 3 <= samples <= 10:
             raise ValueError('enrollment requires 3..10 samples')
@@ -39,7 +39,10 @@ class EnrollmentService:
                 vectors.append(list(self.model.embedding(frames[max(valid)[1]])))
             if not self.shutter_open():
                 raise PermissionError('privacy shutter closed or unknown')
-            self.store.enroll(user_id, vectors)
+            if label is None:
+                self.store.enroll(user_id, vectors)
+            else:
+                self.store.enroll(user_id, vectors, label=label)
         finally:
             frames.clear()
             vectors.clear()
