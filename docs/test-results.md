@@ -1,5 +1,28 @@
 # Verification report — 2026-11-01
 
+## Arduino flow-only capture and enrollment
+
+| Command | Host result |
+|---|---|
+| `PYTHONPATH=/tmp/aquasense-check-deps python -m unittest discover -s tests/unit -p 'test_arduino*.py' -v` | 17 passed |
+| `PYTHONPATH=/tmp/aquasense-check-deps python -m pytest -q` | 77 passed, 40 subtests passed |
+| `/tmp/aquasense-check-deps/bin/ruff check purifier/arduino_monitor.py purifier/vision/arduino_capture.py purifier/vision/arduino_worker.py tests/unit/test_arduino_vision.py` | Passed |
+| `python -m compileall -q purifier tests` | Passed |
+| `git diff --check` | Passed |
+
+With a simulated camera and GPIO imports disabled, positive flow started one
+burst with frames at 1.0, 1.4, and 1.8 seconds. A second interval inside the
+merge window shared that burst and the matched summary. The enrollment command
+saved an encrypted enrollment with both GPIO inputs unset. A configured
+unverified or closed shutter blocked camera opening. A shutter closing during
+capture returned Guest, and an inactive verified proximity sensor blocked
+automatic capture. The worker timeout test continued to report volume and TDS
+as Guest.
+
+Pi verification is pending. The next check uses the Arduino and camera with
+both GPIO fields set to `null` to measure capture timing and test recognition
+and enrollment on the actual hardware.
+
 ## Arduino dispense recognition
 
 | Command | Host result |

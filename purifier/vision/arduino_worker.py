@@ -44,6 +44,7 @@ class Settings:
     shutter: PrivacyInput | None
     threshold: float = 0.60
     margin: float = 0.05
+    shutter_unverified: bool = False
 
     @classmethod
     def load(cls, path: Path) -> "Settings":
@@ -104,6 +105,7 @@ class Settings:
             shutter,
             threshold,
             margin,
+            shutter_unverified=raw.get("shutter") is not None and shutter is None,
         )
 
     def store(self) -> EmbeddingStore:
@@ -117,13 +119,11 @@ class Recognizer:
 
     def recognize(self, started_at: float) -> str | None:
         proximity, shutter = self.settings.proximity, self.settings.shutter
-        if proximity is None or shutter is None:
+        if self.settings.shutter_unverified:
             return None
 
         import cv2
         from cryptography.exceptions import InvalidTag
-        from gpiozero.exc import GPIOZeroError
-        from lgpio import error as LGPIOError
 
         from purifier.vision.still_identify import FaceModel, open_camera
 
@@ -142,7 +142,7 @@ class Recognizer:
                     FaceModel(self.settings.yunet, self.settings.sface)
                 )
 
-            with privacy_inputs(proximity, shutter) as eligible:
+            with privacy_inputs(shutter, proximity=proximity) as eligible:
                 camera = TimedCamera(
                     open_camera,
                     eligible,
@@ -163,8 +163,6 @@ class Recognizer:
             RuntimeError,
             ImportError,
             InvalidTag,
-            GPIOZeroError,
-            LGPIOError,
             cv2.error,
         ):
             return None
@@ -298,15 +296,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.label is not None:
             validate_label(args.label)
-        if settings.proximity is None or settings.shutter is None:
-            raise PermissionError("both privacy inputs must be verified for enrollment")
+        if settings.shutter_unverified:
+            raise PermissionError(
+                "the configured shutter must be verified for enrollment"
+            )
     except (TypeError, ValueError, OSError, ImportError) as exc:
         parser.exit(1, f"{exc}\n")
 
     try:
         import cv2
-        from gpiozero.exc import GPIOZeroError
-        from lgpio import error as LGPIOError
 
         from purifier.vision.still_identify import FaceModel, open_camera
     except ImportError:
@@ -315,11 +313,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         store = settings.store()
-        proximity, shutter = settings.proximity, settings.shutter
-        assert proximity is not None and shutter is not None
         cv2.setNumThreads(1)
         model = FaceBurstModel(FaceModel(settings.yunet, settings.sface))
-        with privacy_inputs(proximity, shutter) as eligible:
+        with privacy_inputs(settings.shutter) as eligible:
             camera = TimedCamera(open_camera, eligible, time.monotonic(), math.inf)
             EnrollmentService(store, camera, model, camera.permitted).enroll(
                 user_id, args.samples, label=args.label
@@ -329,8 +325,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         ValueError,
         RuntimeError,
         ImportError,
-        GPIOZeroError,
-        LGPIOError,
         cv2.error,
     ):
         print(

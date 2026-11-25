@@ -269,7 +269,7 @@ def main() -> int:
             settings = Settings.load(args.vision_config)
         except (OSError, ValueError) as error:
             parser.error(str(error))
-        if settings.proximity is not None and settings.shutter is not None:
+        if not settings.shutter_unverified:
             recognition = RecognitionProcess(Recognizer(settings).recognize)
     monitor = PourMonitor(lambda message: print(message, flush=True), recognition)
 

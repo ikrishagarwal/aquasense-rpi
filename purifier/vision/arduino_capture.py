@@ -22,30 +22,43 @@ class PrivacyInput:
 
 @contextmanager
 def privacy_inputs(
-    proximity: PrivacyInput, shutter: PrivacyInput
+    shutter: PrivacyInput | None = None, *, proximity: PrivacyInput | None = None
 ) -> Iterator[Callable[[], bool]]:
+    if shutter is None and proximity is None:
+        yield lambda: True
+        return
+
     from gpiozero import DigitalInputDevice
+    from gpiozero.exc import GPIOZeroError
     from gpiozero.pins.lgpio import LGPIOFactory
+    from lgpio import error as LGPIOError
 
-    with ExitStack() as stack:
-        factory = LGPIOFactory()
-        stack.callback(factory.close)
-        # A disconnected input is biased to its ineligible state.
-        nearby, opened = (
-            stack.enter_context(
-                DigitalInputDevice(
-                    setting.pin_bcm,
-                    pull_up=not setting.eligible_high,
-                    pin_factory=factory,
+    try:
+        with ExitStack() as stack:
+            factory = LGPIOFactory()
+            stack.callback(factory.close)
+
+            def open_input(setting: PrivacyInput) -> DigitalInputDevice:
+                # A disconnected input is biased to its ineligible state.
+                return stack.enter_context(
+                    DigitalInputDevice(
+                        setting.pin_bcm,
+                        pull_up=not setting.eligible_high,
+                        pin_factory=factory,
+                    )
                 )
-            )
-            for setting in (proximity, shutter)
-        )
 
-        def eligible() -> bool:
-            return nearby.is_active is True and opened.is_active is True
+            opened = open_input(shutter) if shutter is not None else None
+            nearby = open_input(proximity) if proximity is not None else None
 
-        yield eligible
+            def eligible() -> bool:
+                return (opened is None or opened.is_active is True) and (
+                    nearby is None or nearby.is_active is True
+                )
+
+            yield eligible
+    except (GPIOZeroError, LGPIOError) as exc:
+        raise OSError("camera privacy input unavailable") from exc
 
 
 class TimedCamera:

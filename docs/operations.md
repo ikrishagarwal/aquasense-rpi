@@ -46,17 +46,17 @@ python -m unittest discover -s tests/unit -p 'test_arduino*.py' -v
 
 ### Enable automatic face recognition
 
-Install the matching Raspberry Pi OS packages for Picamera2 and GPIO Zero with
-lgpio. Use a virtual environment with access to the system camera and GPIO
-bindings. Download the YuNet 2023mar and SFace 2021dec models specified in the
-example configuration and review their licenses.
+Install Picamera2 from the matching Raspberry Pi OS packages and use a virtual
+environment with access to the system camera bindings. Download the YuNet
+2023mar and SFace 2021dec models specified in the example configuration and
+review their licenses.
 [Picamera2 manual](https://pip-assets.raspberrypi.com/categories/652-raspberry-pi-camera-module-2/documents/RP-008156-DS-7-picamera2-manual.pdf)
 [GPIO Zero pin backends](https://gpiozero.readthedocs.io/en/stable/api_pins.html)
 [YuNet model](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)
 [SFace model](https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface)
 
 ```sh
-sudo apt install python3-picamera2 python3-gpiozero python3-lgpio
+sudo apt install python3-picamera2
 python3 -m venv --system-site-packages .venv-vision
 . .venv-vision/bin/activate
 python -m pip install -r requirements-vision.txt
@@ -71,18 +71,30 @@ retain it if you want to keep access to existing enrollments. Keep the console
 private because it displays user labels. Keep disk-backed swap disabled for
 capture sessions so raw frames stay out of disk-backed memory.
 
-Complete the privacy input checks in [wiring.md](wiring.md#arduino-monitor-camera-privacy)
-before marking either input verified. Set each wired input to an object containing
-`pin_bcm`, `eligible_high`, and `verified`. Set `verified` to `true` only
-after confirming its wiring and fault behavior. Leave unwired inputs as `null`
-or omit them. The monitor requires both inputs to be marked verified and samples
-them before opening the camera and at each frame.
+For the setup with only the Arduino and Pi camera, keep these two fields in
+`var/arduino-vision.json` as shown. Passing `--vision-config` enables automatic
+capture on flow. Run without that flag for Guest-only operation.
 
-Stop the monitor while enrolling. Open the verified shutter and remain within
-range of the verified proximity sensor. Enrollment captures three samples by
-default from the purifier camera and saves encrypted embeddings. Keep the UUID for
-re-enrollment or deletion. The optional label appears on the console in place of
-the UUID.
+```json
+{
+  "proximity": null,
+  "shutter": null
+}
+```
+
+If either optional GPIO input is fitted, install `python3-gpiozero` and
+`python3-lgpio`. Set each fitted input's `pin_bcm`, `eligible_high`, and
+`verified` fields after checking its wiring and fault behavior. The monitor
+checks a configured shutter before opening the camera and before and after
+each frame. An unverified, closed, or faulty configured shutter leaves the pour
+in Guest mode. A verified proximity input adds a gate to automatic capture.
+[Wiring and fault checks](wiring.md#arduino-monitor-camera-privacy)
+
+Stop the monitor while enrolling and position your face in view of the camera.
+Open the shutter if one is configured. Enrollment can run without flow or any
+GPIO inputs. It captures three samples by default and saves encrypted
+embeddings. Keep the UUID for re-enrollment or deletion. The optional label
+appears on the console in place of the UUID.
 
 ```sh
 user_id="$(python -c 'import uuid; print(uuid.uuid4())')"
@@ -93,8 +105,10 @@ python -m purifier.arduino_monitor --port /dev/ttyACM0 --vision-config var/ardui
 python -m purifier.vision.arduino_worker --config var/arduino-vision.json delete --user-id "$user_id"
 ```
 
-The worker schedules the first 640×480 frame one second after the first positive
-flow report and targets 0.4 seconds between frames. Camera startup can shift
+The first valid positive-flow report triggers one three-frame burst for the
+pour. Flow that resumes within the three-second merge window shares that burst.
+The worker schedules the first 640×480 frame one second after that report and
+targets 0.4 seconds between frames. Camera startup can shift
 the first frame later. It embeds the highest-scoring usable face frame and
 requires cosine similarity of at least 0.60 and a lead of at least 0.05 over
 the next enrolled person by default. A completed pour can wait for recognition
@@ -103,13 +117,13 @@ continues throughout. A pour that starts while the only worker is busy reports
 Guest. Interrupted pours print the accepted volume immediately and cancel
 their recognition.
 
-On the bench, test an enrolled pour and a Guest pour, then close the shutter
-during the burst and confirm Guest. Test each disconnected privacy input and
-verify that the camera stays off. Measure the time from first positive report to
-first frame and the inter-frame spacing. Compare several console volumes with
-measuring-cup readings and record results alongside the model and GPIO package
-versions. Physical capture timing, recognition accuracy, and water measurements
-are pending Pi verification.
+On the bench, test an enrolled pour and a Guest pour. If a shutter is fitted,
+close it during a burst and confirm Guest. Disconnect any fitted GPIO gate and
+verify that the camera stays off. Measure the time from first positive report
+to first frame and the inter-frame spacing. Compare several console volumes
+with measuring-cup readings and record results alongside the camera, model, and
+any GPIO package versions. Physical capture timing, recognition accuracy, and
+water measurements are pending Pi verification.
 
 ## One-shot local face identification (prototype)
 

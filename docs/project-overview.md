@@ -23,11 +23,14 @@ development tasks.
 ## Local Face Identification
 
 The Arduino dispense monitor uses an independent worker for automatic face
-identification. With verified proximity and shutter inputs, it attempts three
-frames starting one second after flow detection. It matches the best usable
-frame against encrypted local enrollments and reports Guest when recognition
-is unavailable or ambiguous. The console summary includes the Arduino TDS
-estimate and measured pour volume. See [the Arduino monitor guide](operations.md#arduino-dispense-monitor).
+identification. A valid positive-flow report triggers one three-frame burst per
+pour when recognition is enabled, starting about one second after flow detection.
+The Arduino and camera setup can run without GPIO inputs. A configured shutter
+and a verified proximity sensor add capture gates. The worker matches the best
+usable frame against encrypted local enrollments and reports
+Guest when recognition is unavailable or ambiguous. The console summary
+includes the Arduino TDS estimate and measured pour volume.
+[Arduino monitor guide](operations.md#arduino-dispense-monitor)
 
 ### One-shot face identification prototype
 
