@@ -1,5 +1,24 @@
 # Verification report — 2026-11-01
 
+## Arduino dispense monitor
+
+| Command | Host result |
+|---|---|
+| `python -m unittest discover -s tests/unit -p test_arduino_monitor.py -v` | 8 passed, including Linux pseudo-terminal framing, timeout, and disconnect tests |
+| `python -m unittest discover -s tests/unit -q` | 39 passed, 1 import error in the existing still-photo tests because NumPy is unavailable |
+| `python -m unittest discover -s tests/simulation -q` | 5 passed |
+| `python -m unittest discover -s tests/integration -q` | 16 passed |
+| `python -m purifier.arduino_monitor --help` | Passed |
+
+The CLI was also launched against a pseudo-terminal via a device symlink. It
+reported an incomplete 4.4 mL pour on disconnect, reopened the replacement port,
+and reported a 2.2 mL pour after three seconds of zero-flow reports. Ctrl+C
+returned exit status 0.
+
+No Arduino device was exposed to this workspace. The reported volumes use the
+sketch's 2.222 mL/pulse calibration. A measuring-cup comparison on the Pi is
+pending.
+
 ## Still-photo recognition update — 2026-11-04
 
 Added shared 640x480 preprocessing, explicit OpenCV-compatible camera output,

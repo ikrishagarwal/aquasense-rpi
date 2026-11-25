@@ -1,5 +1,51 @@
 # Running and operating the current implementation
 
+## Arduino dispense monitor
+
+Connect the Arduino running the existing flow and TDS sketch to the Pi over USB.
+Close any Arduino Serial Monitor or other program using the same port. List the
+device paths on the Pi and launch the monitor with the matching path.
+
+```sh
+ls -l /dev/serial/by-id/
+python -m purifier.arduino_monitor --port /dev/ttyACM0
+```
+
+When available, pass the matching `/dev/serial/by-id/…` path to `--port` so the
+monitor can reopen the device if its numbered port changes after reconnecting.
+If there is no by-ID entry, look for the newly created `/dev/ttyACM*` or
+`/dev/ttyUSB*` device. Run from the project root with Python 3.11 or later on
+Linux and an account with read access to the serial device. The monitor uses the
+standard library at 9600 baud and runs independently of the controller, GPIO,
+database, and network.
+
+```text
+Flow started
+Dispensed 248.9 mL | TDS estimate: 82.0 ppm
+```
+
+The first positive interval starts a pour. The monitor sums reported interval
+volumes and times the idle period from the first zero-flow report. Flow that
+resumes before three seconds is included in the same pour. The total includes
+the latest valid TDS estimate received during the pour, or `TDS estimate:
+unavailable`. TDS alone cannot establish whether the water is safe to drink.
+
+A malformed flow report, inconsistent cumulative total, Arduino reset, or
+connection loss during a pour prints `Incomplete pour` with the accepted volume
+so far. Two seconds without a complete serial line also ends an active pour as
+incomplete. The monitor takes a fresh cumulative baseline when reports resume
+and retries disconnected ports once per second. Press Ctrl+C to stop.
+
+Volume uses the sketch's existing calibration of 2.222 mL per pulse. To check
+physical accuracy on the Pi, dispense into a measuring cup, wait for the total,
+and record the cup reading, console total, and their difference in the test
+results. The test command below exercises report handling and Linux serial
+framing with a pseudo-terminal.
+
+```sh
+python -m unittest discover -s tests/unit -p test_arduino_monitor.py -v
+```
+
 ## One-shot local face identification (prototype)
 
 This standalone CLI takes still photos only; it does not use a continuous preview
