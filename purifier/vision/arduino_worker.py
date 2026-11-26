@@ -25,7 +25,7 @@ from purifier.vision.arduino_capture import (
     privacy_inputs,
 )
 from purifier.vision.embedding_store import EmbeddingStore, validate_label
-from purifier.vision.enrollment import EnrollmentService
+from purifier.vision.enrollment import EnrollmentService, NoUsableFaceError
 
 DEADLINE_S = 5.0
 MODEL_ID = "opencv-sface-2021dec"
@@ -112,14 +112,29 @@ class Settings:
         return EmbeddingStore(self.directory, self.key, MODEL_ID, DIMENSION)
 
 
+def vision_debug(started_at: float, now: float, message: str) -> None:
+    print(
+        f"Vision flow_at={started_at:.6f} elapsed_ms={(now - started_at) * 1000:.0f} "
+        f"{message}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 class Recognizer:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, debug: bool = False) -> None:
         self.settings = settings
         self.model: FaceBurstModel | None = None
+        self.debug = debug
 
     def recognize(self, started_at: float) -> str | None:
+        def report(message: str) -> None:
+            if self.debug:
+                vision_debug(started_at, time.monotonic(), message)
+
         proximity, shutter = self.settings.proximity, self.settings.shutter
         if self.settings.shutter_unverified:
+            report("outcome=privacy_blocked")
             return None
 
         import cv2
@@ -135,8 +150,10 @@ class Recognizer:
                 enrolled[path.stem] = vectors
                 labels[path.stem] = label or path.stem
             if not enrolled:
+                report("outcome=no_enrollments")
                 return None
             if self.model is None:
+                report("model_loading")
                 cv2.setNumThreads(1)
                 self.model = FaceBurstModel(
                     FaceModel(self.settings.yunet, self.settings.sface)
@@ -155,6 +172,7 @@ class Recognizer:
                     enrolled,
                     self.settings.threshold,
                     self.settings.margin,
+                    debug=report if self.debug else None,
                 )
             return labels[user] if user is not None else None
         except (
@@ -165,14 +183,16 @@ class Recognizer:
             InvalidTag,
             cv2.error,
         ):
+            report("outcome=unavailable")
             return None
 
 
 def run_worker(
-    connection: Connection, recognize: Callable[[float], str | None]
+    connection: Connection, recognize: Callable[[float], str | None], debug: bool
 ) -> None:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    cold = True
     with connection:
         while True:
             try:
@@ -180,11 +200,22 @@ def run_worker(
             except (EOFError, OSError):
                 return
             label = None
+            now = time.monotonic()
+            if debug:
+                vision_debug(
+                    started_at, now, f"pour={pour_id} worker_ready cold={cold}"
+                )
+            cold = False
             try:
-                if time.monotonic() < started_at + DEADLINE_S:
+                if now < started_at + DEADLINE_S:
                     label = recognize(started_at)
+                elif debug:
+                    vision_debug(started_at, now, "outcome=deadline_expired")
             except ImportError:
-                pass  # Missing optional vision packages leave the pour in Guest mode.
+                if debug:
+                    vision_debug(
+                        started_at, time.monotonic(), "outcome=dependencies_unavailable"
+                    )
             try:
                 connection.send((pour_id, label))
             except OSError:
@@ -194,8 +225,11 @@ def run_worker(
 class RecognitionProcess:
     """A single worker and one outstanding request. Cancellation kills native hangs."""
 
-    def __init__(self, recognize: Callable[[float], str | None]) -> None:
+    def __init__(
+        self, recognize: Callable[[float], str | None], *, debug: bool = False
+    ) -> None:
         self.recognize = recognize
+        self.debug = debug
         self.context = multiprocessing.get_context("spawn")
         self.process: BaseProcess | None = None
         self.connection: Connection | None = None
@@ -216,7 +250,7 @@ class RecognitionProcess:
             except OSError:
                 return False
             process = self.context.Process(
-                target=run_worker, args=(child, self.recognize), daemon=True
+                target=run_worker, args=(child, self.recognize, self.debug), daemon=True
             )
             try:
                 process.start()
@@ -240,7 +274,13 @@ class RecognitionProcess:
             return None
         pour_id, started_at = self.job
         if now >= started_at + DEADLINE_S:
-            self.stop()
+            killed = self.stop()
+            if self.debug:
+                vision_debug(
+                    started_at,
+                    now,
+                    f"pour={pour_id} outcome=deadline_expired worker_killed={killed}",
+                )
             return pour_id, None
         try:
             if not self.connection.poll():
@@ -248,6 +288,10 @@ class RecognitionProcess:
             result_id, label = self.connection.recv()
         except (EOFError, OSError):
             self.stop()
+            if self.debug:
+                vision_debug(
+                    started_at, now, f"pour={pour_id} outcome=worker_disconnected"
+                )
             return pour_id, None
         if result_id != pour_id:
             return None
@@ -256,15 +300,21 @@ class RecognitionProcess:
 
     def cancel(self, pour_id: int) -> None:
         if self.job is not None and self.job[0] == pour_id:
+            if self.debug:
+                vision_debug(
+                    self.job[1], time.monotonic(), f"pour={pour_id} outcome=cancelled"
+                )
             self.stop()
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
         self.job = None
         if self.connection is not None:
             self.connection.close()
             self.connection = None
         if self.process is not None and self.process.is_alive():
             self.process.kill()
+            return True
+        return False
 
     def close(self) -> None:
         self.stop()
@@ -307,30 +357,48 @@ def main(argv: Sequence[str] | None = None) -> int:
         import cv2
 
         from purifier.vision.still_identify import FaceModel, open_camera
-    except ImportError:
-        parser.exit(1, "Arduino vision dependencies are unavailable\n")
+    except ImportError as exc:
+        parser.exit(
+            1,
+            "Arduino vision dependencies are unavailable "
+            f"({exc.name or 'import failed'})\n",
+        )
 
+    step = "preparing the encryption key and enrollment directory"
     try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         store = settings.store()
+        step = "loading the YuNet and SFace models"
         cv2.setNumThreads(1)
         model = FaceBurstModel(FaceModel(settings.yunet, settings.sface))
+        step = "checking the configured shutter"
         with privacy_inputs(settings.shutter) as eligible:
+            step = "capturing samples or saving the encrypted enrollment"
             camera = TimedCamera(open_camera, eligible, time.monotonic(), math.inf)
             EnrollmentService(store, camera, model, camera.permitted).enroll(
                 user_id, args.samples, label=args.label
             )
+    except NoUsableFaceError as exc:
+        print(
+            f"Enrollment failed: {exc}. Face the camera in good light, "
+            "move closer, and retry.",
+            file=sys.stderr,
+        )
+        return 1
+    except ImportError as exc:
+        print(
+            f"Enrollment failed while {step}: missing dependency "
+            f"({exc.name or 'import failed'}).",
+            file=sys.stderr,
+        )
+        return 1
     except (
         OSError,
         ValueError,
         RuntimeError,
-        ImportError,
         cv2.error,
-    ):
-        print(
-            "Enrollment failed. Check camera, privacy inputs, models and storage.",
-            file=sys.stderr,
-        )
+    ) as exc:
+        print(f"Enrollment failed while {step}: {exc}", file=sys.stderr)
         return 1
     print(f"Enrollment saved for {user_id}")
     return 0

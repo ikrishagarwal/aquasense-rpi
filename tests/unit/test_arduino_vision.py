@@ -6,7 +6,8 @@ import time
 import unittest
 from collections import deque
 from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, redirect_stderr
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -185,18 +186,27 @@ class ArduinoVisionTests(unittest.TestCase):
 
         [(pour_id, started_at)] = recognition.jobs
         burst = Burst(started_at)
+        stderr = StringIO()
         with tempfile.TemporaryDirectory() as tmp:
             bench = VisionBench(Path(tmp))
             bench.raw["shutter"] = None
             bench.config.write_text(json.dumps(bench.raw))
             settings = Settings.load(bench.config)
             settings.store().enroll(bench.user, [bench.sample] * 3, label="alice")
-            with bench.dependencies(burst) as model:
-                user = Recognizer(settings).recognize(started_at)
+            with bench.dependencies(burst) as model, redirect_stderr(stderr):
+                user = Recognizer(settings, debug=True).recognize(started_at)
             self.assertEqual(bench.opened_pins, [])
             model.embedding.assert_called_once()
             self.assertEqual(model.embedding.call_args.args[0].image, 3)
         self.assertEqual(user, "alice")
+        for diagnostic in (
+            "capture_finished frames=3",
+            "scoring_finished usable_frames=3",
+            "embedding_finished duration_ms=",
+            "outcome=matched",
+        ):
+            self.assertIn(diagnostic, stderr.getvalue())
+        self.assertNotIn("alice", stderr.getvalue())
         self.assertEqual(burst.opened, 1)
         for actual, expected in zip(burst.frames, (11.0, 11.4, 11.8), strict=True):
             self.assertAlmostEqual(actual, expected)
@@ -211,6 +221,46 @@ class ArduinoVisionTests(unittest.TestCase):
             messages, ["User: alice | TDS estimate: 82.0 ppm | Dispensed: 6.0 mL"]
         )
 
+    def test_unusable_frames_and_scoring_timeout_have_distinct_outcomes(self) -> None:
+        for scoring_s, expected in (
+            (0.0, "no_quality_face"),
+            (2.0, "deadline_expired"),
+        ):
+            with self.subTest(scoring_s=scoring_s):
+                burst = Burst(0.0)
+                events: list[str] = []
+
+                def quality(
+                    _frame: FaceFrame,
+                    delay: float = scoring_s,
+                    clock: Clock = burst.clock,
+                ) -> None:
+                    clock.sleep(delay)
+
+                with patch.object(burst, "quality", side_effect=quality):
+                    user = identify_pour(
+                        burst.camera,
+                        burst,
+                        {"alice": [[1, 0]]},
+                        0.60,
+                        0.05,
+                        debug=events.append,
+                    )
+                self.assertIsNone(user)
+                self.assertIn(f"outcome={expected}", events)
+                self.assertFalse(burst.embedded)
+                messages: list[str] = []
+                recognition = FakeRecognition()
+                monitor = PourMonitor(messages.append, recognition)
+                monitor.receive(b"82,6,6", 0.0)
+                recognition.results.append((1, user))
+                monitor.receive(b",0,6", 1.0)
+                monitor.receive(b",0,6", 4.0)
+                self.assertEqual(
+                    messages,
+                    ["User: Guest | TDS estimate: 82.0 ppm | Dispensed: 6.0 mL"],
+                )
+
     def test_monitor_enables_worker_with_opt_in_vision_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             bench = VisionBench(Path(tmp))
@@ -223,6 +273,9 @@ class ArduinoVisionTests(unittest.TestCase):
                     )
                     bench.config.write_text(json.dumps(bench.raw))
                     argv = ["monitor", "--vision-config", str(bench.config)]
+                    debug = verified is None
+                    if debug:
+                        argv.append("--vision-debug")
                     with (
                         patch("sys.argv", argv),
                         patch("purifier.arduino_monitor.RecognitionProcess") as worker,
@@ -233,6 +286,8 @@ class ArduinoVisionTests(unittest.TestCase):
                     ):
                         self.assertEqual(monitor_main(), 0)
                     self.assertEqual(worker.call_count, int(verified is not False))
+                    if worker.called:
+                        self.assertEqual(worker.call_args.kwargs, {"debug": debug})
 
     def test_automatic_capture_obeys_shutter_and_optional_proximity(self) -> None:
         for blocked_by, expected_frames in (
@@ -322,6 +377,28 @@ class ArduinoVisionTests(unittest.TestCase):
             self.assertEqual(blocked_burst.opened, 0)
             self.assertEqual(store.load_labeled(bench.user), expected)
 
+    def test_enrollment_reports_unusable_face_and_invalid_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bench = VisionBench(Path(tmp))
+            args = ["--config", str(bench.config), "enroll", "--user-id", bench.user]
+            burst = Burst(0.0)
+            stderr = StringIO()
+            with bench.dependencies(burst) as model, redirect_stderr(stderr):
+                model.quality.side_effect = [None] * 3
+                self.assertEqual(enrollment_main(args), 1)
+            self.assertIn("no usable face in sample 1 of 3", stderr.getvalue())
+            self.assertEqual(burst.closed, 1)
+            store = Settings.load(bench.config).store()
+            self.assertEqual(list(store.directory.iterdir()), [])
+
+            (Path(tmp) / "key").write_bytes(b"invalid")
+            burst = Burst(0.0)
+            stderr = StringIO()
+            with bench.dependencies(burst), redirect_stderr(stderr):
+                self.assertEqual(enrollment_main(args), 1)
+            self.assertIn("key must contain exactly 32 random bytes", stderr.getvalue())
+            self.assertEqual(burst.opened, 0)
+
     def test_privacy_and_ambiguous_frames_return_guest(self) -> None:
         cases = [(0.0, 0, 0), (1.2, 1, 1), (float("inf"), 1, 3)]
         for closes_at, opens, frames in cases:
@@ -388,7 +465,7 @@ class ArduinoVisionTests(unittest.TestCase):
     def test_hung_worker_is_killed_at_deadline_and_next_pour_recovers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             marker = Path(tmp) / "capture-entered"
-            worker = RecognitionProcess(HangOnce(marker))
+            worker = RecognitionProcess(HangOnce(marker), debug=True)
             try:
                 messages: list[str] = []
                 monitor = PourMonitor(messages.append, worker)
@@ -401,7 +478,12 @@ class ArduinoVisionTests(unittest.TestCase):
                 for offset in (0.5, 2.0, 3.5):
                     monitor.receive(b",0,2", start + offset)
                 self.assertEqual(messages, [])
-                monitor.tick(start + 5.0)
+                stderr = StringIO()
+                with redirect_stderr(stderr):
+                    monitor.tick(start + 5.0)
+                self.assertIn(
+                    "outcome=deadline_expired worker_killed=True", stderr.getvalue()
+                )
                 self.assertEqual(
                     messages,
                     ["User: Guest | TDS estimate: 80.0 ppm | Dispensed: 2.0 mL"],

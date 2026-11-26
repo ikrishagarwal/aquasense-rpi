@@ -105,6 +105,12 @@ python -m purifier.arduino_monitor --port /dev/ttyACM0 --vision-config var/ardui
 python -m purifier.vision.arduino_worker --config var/arduino-vision.json delete --user-id "$user_id"
 ```
 
+If enrollment fails while preparing storage, check the configured key path and
+permissions. Keep the existing key if you already have enrollments. If model
+loading fails, check that both paths point to the downloaded ONNX files. If the
+command reports no usable face, face the camera in good light, move closer, and
+retry with the same UUID.
+
 The first valid positive-flow report triggers one three-frame burst for the
 pour. Flow that resumes within the three-second merge window shares that burst.
 The worker schedules the first 640×480 frame one second after that report and
@@ -116,6 +122,23 @@ until the five-second deadline from initial flow detection. Serial measurement
 continues throughout. A pour that starts while the only worker is busy reports
 Guest. Interrupted pours print the accepted volume immediately and cancel
 their recognition.
+
+To diagnose Guest during a real pour, run the monitor with debug output and
+make two pours with your face in view before starting each one.
+
+```sh
+python -m purifier.arduino_monitor --port /dev/ttyUSB0 \
+  --vision-config var/arduino-vision.json --vision-debug
+```
+
+The debug lines go to stderr. Use `flow_at` to group lines for each pour.
+`worker_ready` shows the elapsed time from flow detection to worker pickup.
+Compare the first worker job (`cold=True`) with the next. Capture, scoring and
+embedding lines show phase durations and the usable frame count. A phase with
+only a start line was interrupted before it reported completion.
+`deadline_expired` means the recognition budget elapsed, `no_quality_face`
+means the burst produced no usable frames, and `no_match` or `ambiguous` means
+matching ran but did not identify a person. Volume and TDS remain on stdout.
 
 On the bench, test an enrolled pour and a Guest pour. If a shutter is fitted,
 close it during a burst and confirm Guest. Disconnect any fitted GPIO gate and

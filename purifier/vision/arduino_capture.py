@@ -8,7 +8,12 @@ from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from purifier.vision.pipeline import CapturePermission, Model, Pipeline
+from purifier.vision.pipeline import (
+    CapturePermission,
+    Model,
+    Pipeline,
+    RecognitionDeadlineExpired,
+)
 
 FIRST_FRAME_DELAY_S = 1.0
 FRAME_INTERVAL_S = 0.4
@@ -82,8 +87,13 @@ class TimedCamera:
     def permitted(self) -> bool:
         return self.clock() < self.deadline and self.eligible() is True
 
+    def check_deadline(self) -> None:
+        if self.clock() >= self.deadline:
+            raise RecognitionDeadlineExpired("recognition deadline expired")
+
     def check_permission(self) -> None:
-        if not self.permitted():
+        self.check_deadline()
+        if self.eligible() is not True:
             raise PermissionError("camera permission unavailable")
 
     def wait_for_frame(self) -> None:
@@ -145,14 +155,24 @@ def identify_pour(
     enrolled: dict[str, list[list[float]]],
     threshold: float,
     margin: float,
+    *,
+    debug: Callable[[str], None] | None = None,
 ) -> str | None:
     camera.wait_for_frame()
+
+    def permission() -> CapturePermission:
+        camera.check_deadline()
+        return CapturePermission(True, camera.eligible() is True, True)
+
     pipeline = Pipeline(
         camera,
         model,
-        lambda: CapturePermission(True, camera.permitted(), True),
+        permission,
         threshold,
         margin,
+        debug=debug,
     )
     result = pipeline.identify(enrolled)
+    if debug:
+        debug(f"outcome={result.status}")
     return result.user_id if result.status == "matched" else None

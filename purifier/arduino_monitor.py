@@ -15,7 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from purifier.vision.arduino_worker import RecognitionProcess, Recognizer, Settings
+from purifier.vision.arduino_worker import (
+    RecognitionProcess,
+    Recognizer,
+    Settings,
+    vision_debug,
+)
 
 IDLE_SECONDS = 3.0
 REPORT_TIMEOUT_SECONDS = 2.0
@@ -74,10 +79,15 @@ class Pour:
 
 class PourMonitor:
     def __init__(
-        self, emit: Callable[[str], None], recognition: Recognition | None = None
+        self,
+        emit: Callable[[str], None],
+        recognition: Recognition | None = None,
+        *,
+        vision_debug_enabled: bool = False,
     ) -> None:
         self.emit = emit
         self.recognition = recognition
+        self.vision_debug_enabled = vision_debug_enabled
         self.previous_total: float | None = None
         self.pour: Pour | None = None
         self.pending: Pour | None = None
@@ -177,6 +187,14 @@ class PourMonitor:
                 self.pour = pour
                 if self.recognition is not None and self.pending is None:
                     pour.waiting = self.recognition.start(pour.id, now)
+                if self.vision_debug_enabled:
+                    if pour.waiting:
+                        status = "job_queued"
+                    elif self.recognition is None:
+                        status = "outcome=privacy_blocked"
+                    else:
+                        status = "outcome=worker_unavailable_or_busy"
+                    vision_debug(now, time.monotonic(), f"pour={pour.id} {status}")
             pour.volume_ml += report.interval_ml
             pour.zero_since = None
         elif pour is not None and pour.zero_since is None:
@@ -261,7 +279,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", default="/dev/ttyACM0", help="Arduino serial device")
     parser.add_argument("--vision-config", type=Path, help="Opt-in Arduino vision JSON")
+    parser.add_argument(
+        "--vision-debug",
+        action="store_true",
+        help="Print recognition timings to stderr",
+    )
     args = parser.parse_args()
+    if args.vision_debug and args.vision_config is None:
+        parser.error("--vision-debug requires --vision-config")
 
     recognition = None
     if args.vision_config is not None:
@@ -270,8 +295,15 @@ def main() -> int:
         except (OSError, ValueError) as error:
             parser.error(str(error))
         if not settings.shutter_unverified:
-            recognition = RecognitionProcess(Recognizer(settings).recognize)
-    monitor = PourMonitor(lambda message: print(message, flush=True), recognition)
+            recognizer = Recognizer(settings, debug=args.vision_debug)
+            recognition = RecognitionProcess(
+                recognizer.recognize, debug=args.vision_debug
+            )
+    monitor = PourMonitor(
+        lambda message: print(message, flush=True),
+        recognition,
+        vision_debug_enabled=args.vision_debug,
+    )
 
     def tick() -> None:
         monitor.tick(time.monotonic())

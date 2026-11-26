@@ -1,5 +1,32 @@
 # Verification report — 2026-11-01
 
+## Live-pour vision diagnostics
+
+| Command | Host result |
+|---|---|
+| `PYTHONPATH=/tmp/aquasense-check-deps python -m pytest -q` | 79 tests and 42 subtests passed |
+| `/tmp/aquasense-check-deps/bin/ruff check purifier/arduino_monitor.py purifier/vision/arduino_worker.py purifier/vision/arduino_capture.py purifier/vision/pipeline.py tests/unit/test_arduino_vision.py` | Passed |
+| `git diff --check` | Passed |
+
+Simulations distinguished a matched pour, a burst with no usable face, a
+deadline expiring during scoring, and a hung spawned worker killed at the
+deadline. Volume and TDS still appeared in the pour summaries. The first and
+second live-pour timing comparison is pending on the Pi with `/dev/ttyUSB0`.
+
+## Arduino enrollment diagnostics
+
+| Command | Host result |
+|---|---|
+| `PYTHONPATH=/tmp/aquasense-check-deps python -m unittest discover -s tests/unit -p 'test_arduino*.py' -q` | 18 passed |
+| `PYTHONPATH=/tmp/aquasense-check-deps python -m pytest -q` | 78 passed, 40 subtests passed |
+| `/tmp/aquasense-check-deps/bin/ruff check purifier/vision/arduino_worker.py purifier/vision/enrollment.py tests/unit/test_arduino_vision.py` | Passed |
+| `git diff --check` | Passed |
+
+Simulated enrollment reports an invalid key before opening the camera and
+identifies the sample number when all three frames are unusable. The latter
+case closes the camera without saving an enrollment. The error seen on the Pi
+requires rerunning enrollment there to identify its cause.
+
 ## Arduino flow-only capture and enrollment
 
 | Command | Host result |

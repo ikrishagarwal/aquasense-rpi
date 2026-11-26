@@ -5,11 +5,16 @@ and be benchmarked/licensed before use. No images are serialized or persisted.
 """
 
 import math
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from purifier.vision.matcher import Match, match
+
+
+class RecognitionDeadlineExpired(TimeoutError):
+    """The recognition budget expired during capture or inference."""
 
 
 class Camera(Protocol):
@@ -34,32 +39,76 @@ class CapturePermission:
 
 
 class Pipeline:
-    def __init__(self, camera: Camera, model: Model,
-                 permission: Callable[[], CapturePermission],
-                 threshold: float, margin: float) -> None:
+    def __init__(
+        self,
+        camera: Camera,
+        model: Model,
+        permission: Callable[[], CapturePermission],
+        threshold: float,
+        margin: float,
+        *,
+        debug: Callable[[str], None] | None = None,
+    ) -> None:
         self.camera, self.model, self.permission = camera, model, permission
         self.threshold, self.margin = threshold, margin
+        self.debug = debug
 
     def identify(self, enrolled: Mapping[str, Sequence[Sequence[float]]]) -> Match:
         frames: list[Any] = []
+        capture_at = time.monotonic()
+        if self.debug:
+            self.debug("capture_started")
         try:
             try:
                 for _ in range(3):
                     if not self.permission().permitted:
-                        return Match('guest', None, 'privacy_blocked')
+                        return Match("guest", None, "privacy_blocked")
                     frames.append(self.camera.capture())
             finally:
                 self.camera.close()
-            candidates = [(self.model.quality(frame), index) for index, frame in enumerate(frames)]
-            valid = [(score, index) for score, index in candidates if score is not None and math.isfinite(score)]
-            if not valid or not self.permission().permitted:
-                return Match('guest', None, 'no_quality_face')
-            _, selected = max(valid)
-            vector = self.model.embedding(frames[selected])
+            scoring_at = time.monotonic()
+            if self.debug:
+                self.debug(
+                    f"capture_finished frames={len(frames)} "
+                    f"duration_ms={(scoring_at - capture_at) * 1000:.0f}"
+                )
+                self.debug("scoring_started")
+            candidates = [
+                (self.model.quality(frame), index) for index, frame in enumerate(frames)
+            ]
+            valid = [
+                (score, index)
+                for score, index in candidates
+                if score is not None and math.isfinite(score)
+            ]
+            embedding_at = time.monotonic()
+            if self.debug:
+                self.debug(
+                    f"scoring_finished usable_frames={len(valid)} "
+                    f"duration_ms={(embedding_at - scoring_at) * 1000:.0f}"
+                )
             if not self.permission().permitted:
-                return Match('guest', None, 'privacy_blocked')
-            return match(vector, enrolled, self.threshold, self.margin)
+                return Match("guest", None, "privacy_blocked")
+            if not valid:
+                return Match("guest", None, "no_quality_face")
+            _, selected = max(valid)
+            if self.debug:
+                self.debug("embedding_started")
+            vector = self.model.embedding(frames[selected])
+            if self.debug:
+                self.debug(
+                    f"embedding_finished duration_ms="
+                    f"{(time.monotonic() - embedding_at) * 1000:.0f}"
+                )
+            result = match(vector, enrolled, self.threshold, self.margin)
+            if not self.permission().permitted:
+                return Match("guest", None, "privacy_blocked")
+            return result
+        except RecognitionDeadlineExpired:
+            return Match("guest", None, "deadline_expired")
+        except PermissionError:
+            return Match("guest", None, "privacy_blocked")
         except (OSError, ValueError):
-            return Match('guest', None, 'unavailable')
+            return Match("guest", None, "unavailable")
         finally:
             frames.clear()
