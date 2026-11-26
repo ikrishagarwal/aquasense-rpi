@@ -38,6 +38,8 @@ def test_cli_queues_completed_reports_and_resumes_delivery_after_restart(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     path = tmp_path / "outbox.sqlite3"
+    env_file = tmp_path / "arduino.env"
+    env_file.write_text("\n".join(f"{key}={value}" for key, value in ENV.items()))
     offline_request = threading.Event()
     clock = SimpleNamespace(now=0.0)
 
@@ -73,8 +75,11 @@ def test_cli_queues_completed_reports_and_resumes_delivery_after_restart(
         return None
 
     with (
-        patch.dict("os.environ", ENV, clear=True),
-        patch("sys.argv", ["monitor", "--vision-config", "fixture.json"]),
+        patch.dict("os.environ", {}, clear=True),
+        patch(
+            "sys.argv",
+            ["monitor", "--env-file", str(env_file), "--vision-config", "fixture.json"],
+        ),
         patch(
             "purifier.arduino_monitor.Settings.load",
             return_value=SimpleNamespace(
@@ -147,7 +152,7 @@ def test_cli_queues_completed_reports_and_resumes_delivery_after_restart(
         committed[event_id] = payload
         raise TimeoutError("response lost after commit")
 
-    settings = DeliverySettings.load(ENV)
+    settings = DeliverySettings.load({}, env_file=env_file)
     assert settings
     outbox = DispenseOutbox(settings, pytest.fail, path=path, send=restored)
     try:
@@ -200,9 +205,39 @@ def test_permanent_http_rejection_is_retained_and_storage_failures_are_logged(
     assert "disk full" in messages[-1]
 
 
-def test_delivery_settings_are_optional_and_require_all_three_values() -> None:
+def test_delivery_settings_are_optional_and_require_all_three_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
     assert DeliverySettings.load({}) is None
     with pytest.raises(ValueError, match="Set all of AQUASENSE_BACKEND_URL"):
         DeliverySettings.load({"AQUASENSE_DEVICE_ID": DEVICE})
     with pytest.raises(ValueError, match="HTTPS origin"):
         DeliverySettings.load({**ENV, "AQUASENSE_BACKEND_URL": "http://test.invalid"})
+
+
+def test_default_env_file_and_environment_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    Path(".env").write_text(
+        "# Arduino delivery\n"
+        "AQUASENSE_BACKEND_URL = 'https://render.example' # Render origin\n"
+        f'AQUASENSE_DEVICE_ID="{DEVICE}"\n'
+        "AQUASENSE_DEVICE_TOKEN=file-token\n"
+        "UNRELATED_SETTING=ignored\n"
+    )
+    settings = DeliverySettings.load({"AQUASENSE_DEVICE_TOKEN": "override-token"})
+    expected = DeliverySettings("render.example", None, DEVICE, "override-token")
+    assert settings == expected
+
+
+def test_explicit_env_file_errors_keep_token_private(tmp_path: Path) -> None:
+    env_file = tmp_path / "arduino.env"
+    with pytest.raises(FileNotFoundError):
+        DeliverySettings.load(ENV, env_file=env_file)
+
+    env_file.write_text("AQUASENSE_DEVICE_TOKEN='private-value\n")
+    with pytest.raises(ValueError, match="AQUASENSE_DEVICE_TOKEN.*line 1") as error:
+        DeliverySettings.load(ENV, env_file=env_file)
+    assert "private-value" not in str(error.value)

@@ -296,6 +296,9 @@ def main() -> int:
     parser.add_argument("--port", default="/dev/ttyACM0", help="Arduino serial device")
     parser.add_argument("--vision-config", type=Path, help="Opt-in Arduino vision JSON")
     parser.add_argument(
+        "--env-file", type=Path, help="Delivery settings file (default: .env)"
+    )
+    parser.add_argument(
         "--vision-debug",
         action="store_true",
         help="Print recognition timings to stderr",
@@ -304,8 +307,8 @@ def main() -> int:
     if args.vision_debug and args.vision_config is None:
         parser.error("--vision-debug requires --vision-config")
     try:
-        delivery = DeliverySettings.load(os.environ)
-    except ValueError as error:
+        delivery = DeliverySettings.load(os.environ, env_file=args.env_file)
+    except (OSError, ValueError) as error:
         parser.error(str(error))
 
     recognition = None

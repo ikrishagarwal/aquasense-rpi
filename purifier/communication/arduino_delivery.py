@@ -4,6 +4,7 @@ import http.client
 import json
 import os
 import re
+import shlex
 import sqlite3
 import threading
 import time
@@ -18,6 +19,11 @@ from uuid import UUID, uuid4
 REQUEST_TIMEOUT_SECONDS = 5
 MAX_BACKOFF_SECONDS = 300
 OUTBOX_PATH = Path("var/arduino-dispenses.sqlite3")
+DELIVERY_ENV_KEYS = (
+    "AQUASENSE_BACKEND_URL",
+    "AQUASENSE_DEVICE_ID",
+    "AQUASENSE_DEVICE_TOKEN",
+)
 
 
 @dataclass(frozen=True)
@@ -28,17 +34,19 @@ class DeliverySettings:
     token: str = field(repr=False)
 
     @classmethod
-    def load(cls, environ: Mapping[str, str]) -> "DeliverySettings | None":
-        names = (
-            "AQUASENSE_BACKEND_URL",
-            "AQUASENSE_DEVICE_ID",
-            "AQUASENSE_DEVICE_TOKEN",
+    def load(
+        cls, environ: Mapping[str, str], *, env_file: Path | None = None
+    ) -> "DeliverySettings | None":
+        values = read_delivery_env(env_file)
+        values.update(
+            {key: environ[key] for key in DELIVERY_ENV_KEYS if key in environ}
         )
-        if not any(name in environ for name in names):
+        if not values:
             return None
-        url, device_id, token = (environ.get(name, "") for name in names)
+        url, device_id, token = (values.get(key, "") for key in DELIVERY_ENV_KEYS)
         if not (url and device_id and token):
-            raise ValueError(f"Set all of {', '.join(names)} to enable delivery")
+            keys = ", ".join(DELIVERY_ENV_KEYS)
+            raise ValueError(f"Set all of {keys} to enable delivery")
         try:
             endpoint = urlsplit(url)
             host, port = endpoint.hostname, endpoint.port
@@ -62,6 +70,35 @@ class DeliverySettings:
         if not re.fullmatch(r"[A-Za-z0-9._~+/-]+=*", token):
             raise ValueError("AQUASENSE_DEVICE_TOKEN must be a bearer token")
         return cls(host, port, canonical_id, token)
+
+
+def read_delivery_env(env_file: Path | None) -> dict[str, str]:
+    path = env_file if env_file is not None else Path(".env")
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        if env_file is None:
+            return {}
+        raise
+    except UnicodeError:
+        raise ValueError(f"Delivery env file must be UTF-8: {path}") from None
+
+    values: dict[str, str] = {}
+    for line_number, line in enumerate(lines, 1):
+        key, equals, raw = line.partition("=")
+        key = key.strip()
+        if key not in DELIVERY_ENV_KEYS:
+            continue
+        try:
+            parts = shlex.split(raw, comments=True)
+            if not equals or len(parts) > 1:
+                raise ValueError
+        except ValueError:
+            raise ValueError(
+                f"Invalid {key} assignment in {path} at line {line_number}"
+            ) from None
+        values[key] = parts[0] if parts else ""
+    return values
 
 
 @dataclass(frozen=True)

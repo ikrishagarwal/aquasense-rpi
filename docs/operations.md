@@ -46,18 +46,26 @@ python -m pytest tests/unit/test_arduino_*.py
 
 ### Send completed dispenses over HTTPS
 
-The monitor runs in console-only mode with all three delivery variables unset.
-To enable delivery, put the Render HTTPS origin, the provisioned device UUID,
-and the matching per-device token in a private environment file outside version
-control. Export its values before starting the monitor.
+Create a `.env` file in the Pi repo with the Render HTTPS origin, the provisioned
+device UUID, and the matching per-device token. The repo ignores `.env`. Restrict
+access to the file with `chmod 600 .env`.
+
+```dotenv
+AQUASENSE_BACKEND_URL=https://your-service.onrender.com
+AQUASENSE_DEVICE_ID=your-provisioned-device-uuid
+AQUASENSE_DEVICE_TOKEN=your-per-device-token
+```
+
+Start the monitor from the Pi repo. It reads `.env` from the working directory.
 
 ```sh
-export AQUASENSE_BACKEND_URL=https://your-service.onrender.com
-export AQUASENSE_DEVICE_ID='<stable-device-uuid>'
-# Load AQUASENSE_DEVICE_TOKEN from the private environment file.
 python -m purifier.arduino_monitor --port /dev/ttyACM0 \
   --vision-config var/arduino-vision.json
 ```
+
+Use `--env-file /path/to/arduino.env` to load a different file. Shell environment
+variables override the corresponding file entries. With all three delivery
+settings absent, the monitor runs in console-only mode.
 
 The monitor saves each completed pour in `var/arduino-dispenses.sqlite3` before
 sending it. It includes the first and last positive-flow timestamps in UTC,
