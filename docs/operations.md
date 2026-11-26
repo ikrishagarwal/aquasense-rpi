@@ -41,7 +41,38 @@ cup reading, console total, their difference, and the Arduino TDS estimate in
 the test results.
 
 ```sh
-python -m unittest discover -s tests/unit -p 'test_arduino*.py' -v
+python -m pytest tests/unit/test_arduino_*.py
+```
+
+### Send completed dispenses over HTTPS
+
+The monitor runs in console-only mode with all three delivery variables unset.
+To enable delivery, put the Render HTTPS origin, the provisioned device UUID,
+and the matching per-device token in a private environment file outside version
+control. Export its values before starting the monitor.
+
+```sh
+export AQUASENSE_BACKEND_URL=https://your-service.onrender.com
+export AQUASENSE_DEVICE_ID='<stable-device-uuid>'
+# Load AQUASENSE_DEVICE_TOKEN from the private environment file.
+python -m purifier.arduino_monitor --port /dev/ttyACM0 \
+  --vision-config var/arduino-vision.json
+```
+
+The monitor saves each completed pour in `var/arduino-dispenses.sqlite3` before
+sending it. It includes the first and last positive-flow timestamps in UTC,
+the accumulated volume in mL, the latest valid TDS estimate in ppm, and the
+local enrollment UUID when recognized. Guest and unavailable TDS values are
+stored as null. The displayed name stays on the Pi.
+
+Network errors, HTTP 429 and server errors are retried after restart using the
+same event UUID. Keep the same working directory and device UUID across
+restarts. Permanent rejections remain in the outbox and can be inspected with
+SQLite. Persistence failures and permanent rejections are reported on stderr.
+
+```sh
+sqlite3 var/arduino-dispenses.sqlite3 \
+  'SELECT event_id, attempts, failure_reason, rejected FROM arduino_dispenses;'
 ```
 
 ### Enable automatic face recognition

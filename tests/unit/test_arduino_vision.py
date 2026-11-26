@@ -19,8 +19,10 @@ from purifier.arduino_monitor import main as monitor_main
 from purifier.vision.arduino_capture import FaceFrame, TimedCamera, identify_pour
 from purifier.vision.arduino_worker import (
     Job,
+    Match,
     RecognitionProcess,
     Recognizer,
+    Result,
     Settings,
     run_worker,
 )
@@ -81,14 +83,14 @@ class Burst:
 class FakeRecognition:
     def __init__(self) -> None:
         self.jobs: list[tuple[int, float]] = []
-        self.results: deque[tuple[int, str | None]] = deque()
+        self.results: deque[Result] = deque()
         self.cancellations: list[int] = []
 
     def start(self, pour_id: int, started_at: float) -> bool:
         self.jobs.append((pour_id, started_at))
         return True
 
-    def poll(self, now: float) -> tuple[int, str | None] | None:
+    def poll(self, now: float) -> Result | None:
         return self.results.popleft() if self.results else None
 
     def cancel(self, pour_id: int) -> None:
@@ -101,12 +103,12 @@ class HangOnce:
     def __init__(self, marker: Path) -> None:
         self.marker = marker
 
-    def __call__(self, job: Job) -> str:
+    def __call__(self, job: Job) -> Match:
         if not self.marker.exists():
             self.marker.touch()
             while True:
                 time.sleep(60)
-        return "alice"
+        return Match("11111111-1111-4111-8111-111111111111", "alice")
 
 
 class VisionBench:
@@ -206,7 +208,7 @@ class ArduinoVisionTests(unittest.TestCase):
             self.assertEqual(bench.opened_pins, [])
             model.embedding.assert_called_once()
             self.assertEqual(model.embedding.call_args.args[0].image, 3)
-        self.assertEqual(user, "alice")
+        self.assertEqual(user, Match(bench.user, "alice"))
         for diagnostic in (
             "capture_finished frames=3",
             "scoring_finished usable_frames=3",
@@ -261,7 +263,7 @@ class ArduinoVisionTests(unittest.TestCase):
                 recognition = FakeRecognition()
                 monitor = PourMonitor(messages.append, recognition)
                 monitor.receive(b"82,6,6", 0.0)
-                recognition.results.append((1, user))
+                recognition.results.append((1, None))
                 monitor.receive(b",0,6", 1.0)
                 monitor.receive(b",0,6", 4.0)
                 self.assertEqual(
@@ -322,9 +324,9 @@ class ArduinoVisionTests(unittest.TestCase):
         expires_during_work = Job(2, 2.0, 7.0)
         connection.recv.side_effect = (expired_at_pickup, expires_during_work, EOFError)
 
-        def recognize(_job: Job) -> str:
+        def recognize(_job: Job) -> Match:
             clock.sleep(1.0)
-            return "alice"
+            return Match(str(uuid4()), "alice")
 
         recognize_spy = MagicMock(side_effect=recognize)
         with (
@@ -505,10 +507,10 @@ class ArduinoVisionTests(unittest.TestCase):
             monitor.receive(line, now)
         self.assertEqual(messages, [])
         self.assertEqual(recognition.jobs, [(1, 0.0)])
-        recognition.results.append((1, "alice"))
+        recognition.results.append((1, Match(str(uuid4()), "alice")))
         monitor.tick(4.0)
         monitor.receive(b"91,0,6", 4.5)
-        recognition.results.append((1, "late"))
+        recognition.results.append((1, Match(str(uuid4()), "late")))
         monitor.receive(b",0,6", 6.0)
         monitor.receive(b",0,6", 7.5)
         self.assertEqual(
@@ -527,7 +529,7 @@ class ArduinoVisionTests(unittest.TestCase):
         monitor.interrupt("serial connection lost")
         self.assertEqual(recognition.cancellations, [1])
         monitor.receive(b"90,4,4", 1.0)
-        recognition.results.append((1, "late"))
+        recognition.results.append((1, Match(str(uuid4()), "late")))
         monitor.receive(b",0,4", 1.5)
         recognition.results.append((2, None))
         monitor.receive(b",0,4", 3.0)
@@ -540,6 +542,28 @@ class ArduinoVisionTests(unittest.TestCase):
                 "User: Guest | TDS estimate: 90.0 ppm | Dispensed: 4.0 mL",
             ],
         )
+
+    def test_shutdown_queues_completed_pour_with_available_identity(self) -> None:
+        match = Match(str(uuid4()), "Alice")
+        for result in (None, match):
+            with self.subTest(result=result):
+                recognition = FakeRecognition()
+                completed = []
+                monitor = PourMonitor(
+                    lambda _: None, recognition, on_completed=completed.append
+                )
+                monitor.receive(b"80,2,2", 0.0)
+                monitor.receive(b",0,2", 0.5)
+                monitor.receive(b",0,2", 3.5)
+                monitor.receive(b"90,4,6", 4.0)
+                self.assertEqual(completed, [])
+                if result is not None:
+                    recognition.results.append((1, result))
+                monitor.stop()
+                monitor.stop()
+                [pour] = completed
+                self.assertEqual(pour.match, result)
+                self.assertEqual(pour.volume_ml, 2.0)
 
     def test_hung_worker_is_killed_at_deadline_and_next_pour_recovers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,6 +5,7 @@ import math
 import os
 import select
 import signal
+import sqlite3
 import sys
 import termios
 import time
@@ -12,12 +13,16 @@ import tty
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
+from purifier.communication.arduino_delivery import DeliverySettings, DispenseOutbox
 from purifier.vision.arduino_worker import (
+    Match,
     RecognitionProcess,
     Recognizer,
+    Result,
     Settings,
     vision_debug,
 )
@@ -63,15 +68,17 @@ class Report:
 
 class Recognition(Protocol):
     def start(self, pour_id: int, started_at: float) -> bool: ...
-    def poll(self, now: float) -> tuple[int, str | None] | None: ...
+    def poll(self, now: float) -> Result | None: ...
     def cancel(self, pour_id: int) -> None: ...
 
 
 @dataclass
 class Pour:
     id: int
+    started_at: datetime
+    ended_at: datetime
     waiting: bool = False
-    label: str | None = None
+    match: Match | None = None
     volume_ml: float = 0.0
     tds_ppm: float | None = None
     zero_since: float | None = None
@@ -84,10 +91,12 @@ class PourMonitor:
         recognition: Recognition | None = None,
         *,
         vision_debug_enabled: bool = False,
+        on_completed: Callable[[Pour], None] | None = None,
     ) -> None:
         self.emit = emit
         self.recognition = recognition
         self.vision_debug_enabled = vision_debug_enabled
+        self.on_completed = on_completed
         self.previous_total: float | None = None
         self.pour: Pour | None = None
         self.pending: Pour | None = None
@@ -95,7 +104,7 @@ class PourMonitor:
 
     def summarize(self, pour: Pour, reason: str | None = None) -> None:
         tds = "unavailable" if pour.tds_ppm is None else f"{pour.tds_ppm:.1f} ppm"
-        user = pour.label or "Guest"
+        user = pour.match.label if pour.match is not None else "Guest"
         volume = f"{pour.volume_ml:.1f} mL"
         dispensed = (
             f"Dispensed: {volume}"
@@ -104,19 +113,25 @@ class PourMonitor:
         )
         self.emit(f"User: {user} | TDS estimate: {tds} | {dispensed}")
 
+    def complete(self, pour: Pour) -> None:
+        if self.on_completed is not None and pour.volume_ml > 0:
+            self.on_completed(pour)
+        self.summarize(pour)
+
     def tick(self, now: float) -> None:
         if self.recognition is None:
             return
         result = self.recognition.poll(now)
         if result is None:
             return
-        pour_id, label = result
+        pour_id, match = result
         if self.pending is not None and self.pending.id == pour_id:
-            self.pending.label = label
-            self.summarize(self.pending)
+            pour = self.pending
             self.pending = None
+            pour.match = match
+            self.complete(pour)
         elif self.pour is not None and self.pour.id == pour_id and self.pour.waiting:
-            self.pour.label = label
+            self.pour.match = match
             self.pour.waiting = False
 
     def finish(self, *, reason: str | None = None) -> None:
@@ -126,24 +141,27 @@ class PourMonitor:
         if reason is not None:
             if self.recognition is not None:
                 self.recognition.cancel(pour.id)
-            pour.label = None
+            pour.match = None
             self.summarize(pour, reason)
         elif pour.waiting:
             self.pending = pour
         else:
-            self.summarize(pour)
+            self.complete(pour)
 
     def interrupt(self, reason: str) -> None:
         self.finish(reason=reason)
         self.previous_total = None
 
     def stop(self) -> None:
+        if self.pending is not None:
+            self.tick(time.monotonic())
         self.interrupt("monitor stopped")
         if self.pending is not None:
             if self.recognition is not None:
                 self.recognition.cancel(self.pending.id)
-            self.summarize(self.pending)
+            pour = self.pending
             self.pending = None
+            self.complete(pour)
 
     def receive(self, line: bytes | None, now: float) -> None:
         self.tick(now)
@@ -178,11 +196,12 @@ class PourMonitor:
             and now - pour.zero_since >= IDLE_SECONDS
         )
         if report.interval_ml > 0:
+            reported_at = datetime.now(UTC)
             if idle:
                 self.finish()
                 pour = None
             if pour is None:
-                pour = Pour(self.next_id)
+                pour = Pour(self.next_id, reported_at, reported_at)
                 self.next_id += 1
                 self.pour = pour
                 if self.recognition is not None and self.pending is None:
@@ -195,6 +214,7 @@ class PourMonitor:
                     else:
                         status = "outcome=worker_unavailable_or_busy"
                     vision_debug(now, time.monotonic(), f"pour={pour.id} {status}")
+            pour.ended_at = max(pour.started_at, reported_at)
             pour.volume_ml += report.interval_ml
             pour.zero_since = None
         elif pour is not None and pour.zero_since is None:
@@ -271,10 +291,6 @@ def read_reports(
                 discarding = True
 
 
-def stop_on_signal(_signum: int, _frame: object) -> None:
-    raise KeyboardInterrupt
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", default="/dev/ttyACM0", help="Arduino serial device")
@@ -287,6 +303,10 @@ def main() -> int:
     args = parser.parse_args()
     if args.vision_debug and args.vision_config is None:
         parser.error("--vision-debug requires --vision-config")
+    try:
+        delivery = DeliverySettings.load(os.environ)
+    except ValueError as error:
+        parser.error(str(error))
 
     recognition = None
     if args.vision_config is not None:
@@ -301,23 +321,52 @@ def main() -> int:
                 recognition_deadline_s=settings.recognition_deadline_s,
                 debug=args.vision_debug,
             )
+    outbox = None
+    if delivery is not None:
+        try:
+            outbox = DispenseOutbox(
+                delivery, lambda message: print(message, file=sys.stderr, flush=True)
+            )
+        except (OSError, sqlite3.Error) as error:
+            parser.error(f"Unable to open Arduino dispense outbox: {error}")
+
+    def enqueue(pour: Pour) -> None:
+        if outbox is not None:
+            outbox.enqueue(
+                recognized_user_id=pour.match.user_id if pour.match else None,
+                start_ts=pour.started_at.isoformat().replace("+00:00", "Z"),
+                end_ts=pour.ended_at.isoformat().replace("+00:00", "Z"),
+                volume_ml=pour.volume_ml,
+                tds_ppm=pour.tds_ppm,
+            )
+
     monitor = PourMonitor(
         lambda message: print(message, flush=True),
         recognition,
         vision_debug_enabled=args.vision_debug,
+        on_completed=enqueue if outbox is not None else None,
     )
+    stopping = False
+
+    def stop_on_signal(_signum: int, _frame: object) -> None:
+        nonlocal stopping
+        stopping = True
 
     def tick() -> None:
+        if stopping:
+            raise KeyboardInterrupt
         monitor.tick(time.monotonic())
 
-    on_tick = tick if recognition is not None else None
-    previous_handler = signal.signal(signal.SIGTERM, stop_on_signal)
+    previous_handlers = {
+        signum: signal.signal(signum, stop_on_signal)
+        for signum in (signal.SIGINT, signal.SIGTERM)
+    }
     reported_error = False
     try:
         while True:
             try:
                 with open_port(args.port) as fd:
-                    for line in read_reports(fd, on_tick=on_tick):
+                    for line in read_reports(fd, on_tick=tick):
                         if line is not None:
                             reported_error = False
                         monitor.receive(line, time.monotonic())
@@ -336,9 +385,12 @@ def main() -> int:
         monitor.stop()
         return 0
     finally:
-        signal.signal(signal.SIGTERM, previous_handler)
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
         if recognition is not None:
             recognition.close()
+        if outbox is not None:
+            outbox.close()
 
 
 if __name__ == "__main__":

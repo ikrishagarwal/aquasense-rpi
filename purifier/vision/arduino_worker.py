@@ -30,7 +30,15 @@ from purifier.vision.enrollment import EnrollmentService, NoUsableFaceError
 DEFAULT_RECOGNITION_DEADLINE_S = 5.0
 MODEL_ID = "opencv-sface-2021dec"
 DIMENSION = 128
-Result = tuple[int, str | None]
+
+
+@dataclass(frozen=True)
+class Match:
+    user_id: str
+    label: str
+
+
+Result = tuple[int, Match | None]
 
 
 @dataclass(frozen=True)
@@ -144,7 +152,7 @@ class Recognizer:
         self.model: FaceBurstModel | None = None
         self.debug = debug
 
-    def recognize(self, job: Job) -> str | None:
+    def recognize(self, job: Job) -> Match | None:
         def report(message: str) -> None:
             if self.debug:
                 vision_debug(job.started_at, time.monotonic(), message)
@@ -191,7 +199,7 @@ class Recognizer:
                     self.settings.margin,
                     debug=report if self.debug else None,
                 )
-            return labels[user] if user is not None else None
+            return Match(user, labels[user]) if user is not None else None
         except (
             OSError,
             ValueError,
@@ -205,7 +213,7 @@ class Recognizer:
 
 
 def run_worker(
-    connection: Connection, recognize: Callable[[Job], str | None], debug: bool
+    connection: Connection, recognize: Callable[[Job], Match | None], debug: bool
 ) -> None:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -225,9 +233,9 @@ def run_worker(
             cold = False
             if time.monotonic() >= job.deadline:
                 continue
-            label = None
+            match = None
             try:
-                label = recognize(job)
+                match = recognize(job)
             except ImportError:
                 if debug:
                     vision_debug(
@@ -239,7 +247,7 @@ def run_worker(
             if time.monotonic() >= job.deadline:
                 continue
             try:
-                connection.send((job.pour_id, label))
+                connection.send((job.pour_id, match))
             except OSError:
                 return
 
@@ -249,7 +257,7 @@ class RecognitionProcess:
 
     def __init__(
         self,
-        recognize: Callable[[Job], str | None],
+        recognize: Callable[[Job], Match | None],
         *,
         recognition_deadline_s: float = DEFAULT_RECOGNITION_DEADLINE_S,
         debug: bool = False,
@@ -314,7 +322,7 @@ class RecognitionProcess:
         try:
             if not self.connection.poll():
                 return None
-            result_id, label = self.connection.recv()
+            result_id, match = self.connection.recv()
         except (EOFError, OSError):
             self.stop()
             if self.debug:
@@ -327,7 +335,7 @@ class RecognitionProcess:
         if result_id != job.pour_id:
             return None
         self.job = None
-        return job.pour_id, label
+        return job.pour_id, match
 
     def cancel(self, pour_id: int) -> None:
         if self.job is not None and self.job.pour_id == pour_id:
