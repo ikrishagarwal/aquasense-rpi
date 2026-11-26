@@ -1,5 +1,26 @@
 # Verification report — 2026-11-01
 
+## Arduino recognition deadline trial — 2026-11-26
+
+| Command | Host result |
+|---|---|
+| `PYTHONPATH=/tmp/aquasense-check-deps python -m pytest -q` | 82 tests and 54 subtests passed |
+| `/tmp/aquasense-check-deps/bin/ruff check purifier/arduino_monitor.py purifier/vision/arduino_worker.py purifier/vision/arduino_capture.py purifier/vision/pipeline.py tests/unit/test_arduino_vision.py` | Passed |
+| `/tmp/aquasense-check-deps/bin/ruff format --check purifier/arduino_monitor.py purifier/vision/arduino_worker.py purifier/vision/arduino_capture.py purifier/vision/pipeline.py tests/unit/test_arduino_vision.py` | Passed |
+| `python -m purifier.arduino_monitor --help` | Passed |
+| `git diff --check` | Passed |
+
+With a ten-second budget, the simulated worker picked up a job after five
+seconds and finished in time for a matched pour summary. A spawned worker that
+hung was killed at ten seconds on the simulated monitor clock. The monitor
+reported Guest with the pour's volume and TDS, then recognized the next pour
+with a fresh worker. Configuration tests verified the 5.0-second default and
+rejection of nonnumeric, non-finite, and out-of-range settings.
+
+The Pi at `raspberrypi.local` responded to SSH and rejected authentication.
+The ten-second bench setting, cold and warm timings, and live match for Krish
+remain to be verified using the [bench procedure](operations.md#enable-automatic-face-recognition).
+
 ## Live-pour vision diagnostics
 
 | Command | Host result |

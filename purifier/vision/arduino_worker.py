@@ -27,11 +27,17 @@ from purifier.vision.arduino_capture import (
 from purifier.vision.embedding_store import EmbeddingStore, validate_label
 from purifier.vision.enrollment import EnrollmentService, NoUsableFaceError
 
-DEADLINE_S = 5.0
+DEFAULT_RECOGNITION_DEADLINE_S = 5.0
 MODEL_ID = "opencv-sface-2021dec"
 DIMENSION = 128
-Job = tuple[int, float]
 Result = tuple[int, str | None]
+
+
+@dataclass(frozen=True)
+class Job:
+    pour_id: int
+    started_at: float
+    deadline: float
 
 
 @dataclass(frozen=True)
@@ -45,12 +51,19 @@ class Settings:
     threshold: float = 0.60
     margin: float = 0.05
     shutter_unverified: bool = False
+    recognition_deadline_s: float = DEFAULT_RECOGNITION_DEADLINE_S
 
     @classmethod
     def load(cls, path: Path) -> "Settings":
         raw = json.loads(path.read_text(), object_pairs_hook=_pairs)
         required = {"yunet", "sface", "directory", "key"}
-        optional = {"proximity", "shutter", "threshold", "margin"}
+        optional = {
+            "proximity",
+            "shutter",
+            "threshold",
+            "margin",
+            "recognition_deadline_s",
+        }
         if (
             not isinstance(raw, dict)
             or not required <= raw.keys()
@@ -96,6 +109,9 @@ class Settings:
             or not 0 < margin <= 2
         ):
             raise ValueError("invalid threshold or runner-up margin")
+        deadline_s = raw.get("recognition_deadline_s", DEFAULT_RECOGNITION_DEADLINE_S)
+        if type(deadline_s) not in (int, float) or not 5 <= deadline_s <= 20:
+            raise ValueError("recognition_deadline_s must be a number from 5 to 20")
         return cls(
             configured_path("yunet"),
             configured_path("sface"),
@@ -106,6 +122,7 @@ class Settings:
             threshold,
             margin,
             shutter_unverified=raw.get("shutter") is not None and shutter is None,
+            recognition_deadline_s=float(deadline_s),
         )
 
     def store(self) -> EmbeddingStore:
@@ -127,10 +144,10 @@ class Recognizer:
         self.model: FaceBurstModel | None = None
         self.debug = debug
 
-    def recognize(self, started_at: float) -> str | None:
+    def recognize(self, job: Job) -> str | None:
         def report(message: str) -> None:
             if self.debug:
-                vision_debug(started_at, time.monotonic(), message)
+                vision_debug(job.started_at, time.monotonic(), message)
 
         proximity, shutter = self.settings.proximity, self.settings.shutter
         if self.settings.shutter_unverified:
@@ -163,8 +180,8 @@ class Recognizer:
                 camera = TimedCamera(
                     open_camera,
                     eligible,
-                    started_at + FIRST_FRAME_DELAY_S,
-                    started_at + DEADLINE_S,
+                    job.started_at + FIRST_FRAME_DELAY_S,
+                    job.deadline,
                 )
                 user = identify_pour(
                     camera,
@@ -188,7 +205,7 @@ class Recognizer:
 
 
 def run_worker(
-    connection: Connection, recognize: Callable[[float], str | None], debug: bool
+    connection: Connection, recognize: Callable[[Job], str | None], debug: bool
 ) -> None:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -196,28 +213,33 @@ def run_worker(
     with connection:
         while True:
             try:
-                pour_id, started_at = connection.recv()
+                job: Job = connection.recv()
             except (EOFError, OSError):
                 return
-            label = None
-            now = time.monotonic()
             if debug:
                 vision_debug(
-                    started_at, now, f"pour={pour_id} worker_ready cold={cold}"
+                    job.started_at,
+                    time.monotonic(),
+                    f"pour={job.pour_id} worker_ready cold={cold}",
                 )
             cold = False
+            if time.monotonic() >= job.deadline:
+                continue
+            label = None
             try:
-                if now < started_at + DEADLINE_S:
-                    label = recognize(started_at)
-                elif debug:
-                    vision_debug(started_at, now, "outcome=deadline_expired")
+                label = recognize(job)
             except ImportError:
                 if debug:
                     vision_debug(
-                        started_at, time.monotonic(), "outcome=dependencies_unavailable"
+                        job.started_at,
+                        time.monotonic(),
+                        "outcome=dependencies_unavailable",
                     )
+            # Leave expired jobs outstanding so the monitor kills the worker.
+            if time.monotonic() >= job.deadline:
+                continue
             try:
-                connection.send((pour_id, label))
+                connection.send((job.pour_id, label))
             except OSError:
                 return
 
@@ -226,9 +248,14 @@ class RecognitionProcess:
     """A single worker and one outstanding request. Cancellation kills native hangs."""
 
     def __init__(
-        self, recognize: Callable[[float], str | None], *, debug: bool = False
+        self,
+        recognize: Callable[[Job], str | None],
+        *,
+        recognition_deadline_s: float = DEFAULT_RECOGNITION_DEADLINE_S,
+        debug: bool = False,
     ) -> None:
         self.recognize = recognize
+        self.recognition_deadline_s = recognition_deadline_s
         self.debug = debug
         self.context = multiprocessing.get_context("spawn")
         self.process: BaseProcess | None = None
@@ -238,6 +265,7 @@ class RecognitionProcess:
     def start(self, pour_id: int, started_at: float) -> bool:
         if self.job is not None:
             return False
+        job = Job(pour_id, started_at, started_at + self.recognition_deadline_s)
         if self.process is not None and not self.process.is_alive():
             self.stop()
             self.process.close()
@@ -262,26 +290,27 @@ class RecognitionProcess:
                 child.close()
             self.process, self.connection = process, parent
         try:
-            self.connection.send((pour_id, started_at))
+            self.connection.send(job)
         except OSError:
             self.stop()
             return False
-        self.job = (pour_id, started_at)
+        self.job = job
         return True
 
     def poll(self, now: float) -> Result | None:
         if self.job is None or self.connection is None:
             return None
-        pour_id, started_at = self.job
-        if now >= started_at + DEADLINE_S:
+        job = self.job
+        if now >= job.deadline:
             killed = self.stop()
             if self.debug:
                 vision_debug(
-                    started_at,
+                    job.started_at,
                     now,
-                    f"pour={pour_id} outcome=deadline_expired worker_killed={killed}",
+                    f"pour={job.pour_id} outcome=deadline_expired "
+                    f"worker_killed={killed}",
                 )
-            return pour_id, None
+            return job.pour_id, None
         try:
             if not self.connection.poll():
                 return None
@@ -290,19 +319,23 @@ class RecognitionProcess:
             self.stop()
             if self.debug:
                 vision_debug(
-                    started_at, now, f"pour={pour_id} outcome=worker_disconnected"
+                    job.started_at,
+                    now,
+                    f"pour={job.pour_id} outcome=worker_disconnected",
                 )
-            return pour_id, None
-        if result_id != pour_id:
+            return job.pour_id, None
+        if result_id != job.pour_id:
             return None
         self.job = None
-        return pour_id, label
+        return job.pour_id, label
 
     def cancel(self, pour_id: int) -> None:
-        if self.job is not None and self.job[0] == pour_id:
+        if self.job is not None and self.job.pour_id == pour_id:
             if self.debug:
                 vision_debug(
-                    self.job[1], time.monotonic(), f"pour={pour_id} outcome=cancelled"
+                    self.job.started_at,
+                    time.monotonic(),
+                    f"pour={pour_id} outcome=cancelled",
                 )
             self.stop()
 

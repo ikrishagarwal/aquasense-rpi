@@ -117,14 +117,19 @@ The worker schedules the first 640×480 frame one second after that report and
 targets 0.4 seconds between frames. Camera startup can shift
 the first frame later. It embeds the highest-scoring usable face frame and
 requires cosine similarity of at least 0.60 and a lead of at least 0.05 over
-the next enrolled person by default. A completed pour can wait for recognition
-until the five-second deadline from initial flow detection. Serial measurement
-continues throughout. A pour that starts while the only worker is busy reports
-Guest. Interrupted pours print the accepted volume immediately and cancel
-their recognition.
+the next enrolled person by default. The Arduino vision JSON accepts
+`recognition_deadline_s` as a finite number from 5 through 20 seconds and
+defaults to 5.0 when omitted. The deadline starts at the first positive-flow
+report and includes worker startup, capture, and inference. At expiry the
+monitor kills the worker and reports the pour as Guest with its measured
+volume and latest valid TDS estimate. Serial measurement continues throughout.
+A pour that starts while the only worker is busy reports Guest. Interrupted
+pours print the accepted volume immediately and cancel their recognition.
 
-To diagnose Guest during a real pour, run the monitor with debug output and
-make two pours with your face in view before starting each one.
+For the Pi bench trial, set `"recognition_deadline_s": 10.0` in the active
+`var/arduino-vision.json`. Run the debug monitor and make two pours with Krish
+in view of the camera before starting each one. Wait for the first pour
+summary before starting the second and keep the same monitor running.
 
 ```sh
 python -m purifier.arduino_monitor --port /dev/ttyUSB0 \
@@ -133,9 +138,12 @@ python -m purifier.arduino_monitor --port /dev/ttyUSB0 \
 
 The debug lines go to stderr. Use `flow_at` to group lines for each pour.
 `worker_ready` shows the elapsed time from flow detection to worker pickup.
-Compare the first worker job (`cold=True`) with the next. Capture, scoring and
-embedding lines show phase durations and the usable frame count. A phase with
-only a start line was interrupted before it reported completion.
+Compare the first worker job (`cold=True`) with the second (`cold=False` if the
+worker survived). For each pour record worker pickup and the elapsed times for
+capture, scoring, embedding, and the outcome. A successful recognition prints
+`outcome=matched` on stderr and `User: Krish` on stdout. A phase with only a
+start line was interrupted before it reported completion. If capture still
+misses the ten-second cutoff, investigate camera capture before raising it again.
 `deadline_expired` means the recognition budget elapsed, `no_quality_face`
 means the burst produced no usable frames, and `no_match` or `ambiguous` means
 matching ran but did not identify a person. Volume and TDS remain on stdout.

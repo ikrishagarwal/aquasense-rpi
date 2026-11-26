@@ -297,7 +297,9 @@ def main() -> int:
         if not settings.shutter_unverified:
             recognizer = Recognizer(settings, debug=args.vision_debug)
             recognition = RecognitionProcess(
-                recognizer.recognize, debug=args.vision_debug
+                recognizer.recognize,
+                recognition_deadline_s=settings.recognition_deadline_s,
+                debug=args.vision_debug,
             )
     monitor = PourMonitor(
         lambda message: print(message, flush=True),

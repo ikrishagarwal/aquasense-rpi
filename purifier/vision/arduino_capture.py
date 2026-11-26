@@ -97,7 +97,8 @@ class TimedCamera:
             raise PermissionError("camera permission unavailable")
 
     def wait_for_frame(self) -> None:
-        self.sleep(max(0.0, self.next_frame_at - self.clock()))
+        wake_at = min(self.next_frame_at, self.deadline)
+        self.sleep(max(0.0, wake_at - self.clock()))
 
     def capture(self) -> FaceFrame:
         self.wait_for_frame()

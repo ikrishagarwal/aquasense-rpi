@@ -6,5 +6,6 @@
   "proximity": null,
   "shutter": null,
   "threshold": 0.60,
-  "margin": 0.05
+  "margin": 0.05,
+  "recognition_deadline_s": 5.0
 }

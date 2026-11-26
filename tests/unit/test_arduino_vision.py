@@ -17,7 +17,13 @@ from uuid import uuid4
 from purifier.arduino_monitor import PourMonitor
 from purifier.arduino_monitor import main as monitor_main
 from purifier.vision.arduino_capture import FaceFrame, TimedCamera, identify_pour
-from purifier.vision.arduino_worker import RecognitionProcess, Recognizer, Settings
+from purifier.vision.arduino_worker import (
+    Job,
+    RecognitionProcess,
+    Recognizer,
+    Settings,
+    run_worker,
+)
 from purifier.vision.arduino_worker import main as enrollment_main
 
 
@@ -95,7 +101,7 @@ class HangOnce:
     def __init__(self, marker: Path) -> None:
         self.marker = marker
 
-    def __call__(self, started_at: float) -> str:
+    def __call__(self, job: Job) -> str:
         if not self.marker.exists():
             self.marker.touch()
             while True:
@@ -194,7 +200,9 @@ class ArduinoVisionTests(unittest.TestCase):
             settings = Settings.load(bench.config)
             settings.store().enroll(bench.user, [bench.sample] * 3, label="alice")
             with bench.dependencies(burst) as model, redirect_stderr(stderr):
-                user = Recognizer(settings, debug=True).recognize(started_at)
+                user = Recognizer(settings, debug=True).recognize(
+                    Job(pour_id, started_at, started_at + 5.0)
+                )
             self.assertEqual(bench.opened_pins, [])
             model.embedding.assert_called_once()
             self.assertEqual(model.embedding.call_args.args[0].image, 3)
@@ -261,9 +269,77 @@ class ArduinoVisionTests(unittest.TestCase):
                     ["User: Guest | TDS estimate: 82.0 ppm | Dispensed: 6.0 mL"],
                 )
 
+    def test_ten_second_budget_accepts_result_after_five_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bench = VisionBench(Path(tmp))
+            bench.raw["recognition_deadline_s"] = 10.0
+            bench.config.write_text(json.dumps(bench.raw))
+            settings = Settings.load(bench.config)
+            settings.store().enroll(bench.user, [bench.sample] * 3, label="alice")
+            burst = Burst(20.0)
+            worker = RecognitionProcess(
+                Recognizer(settings).recognize,
+                recognition_deadline_s=settings.recognition_deadline_s,
+            )
+            worker.context = MagicMock()
+            parent, child = MagicMock(), MagicMock()
+            worker.context.Pipe.return_value = parent, child
+            parent.poll.return_value = False
+            messages: list[str] = []
+            monitor = PourMonitor(messages.append, worker)
+            monitor.receive(b"80,2,2", 20.0)
+            for now in (20.5, 22.0, 23.5, 25.0):
+                monitor.receive(b",0,2", now)
+            self.assertEqual(messages, [])
+            job = parent.send.call_args.args[0]
+            self.assertEqual(job, Job(1, 20.0, 30.0))
+            child.recv.side_effect = (job, EOFError)
+            burst.clock.now = 25.25
+            with (
+                bench.dependencies(burst) as model,
+                patch("purifier.vision.arduino_worker.signal.signal"),
+                patch(
+                    "purifier.vision.arduino_worker.time.monotonic", burst.clock.read
+                ),
+            ):
+                run_worker(child, worker.recognize, debug=False)
+                model.embedding.assert_called_once()
+            self.assertGreater(burst.clock.now, 25.0)
+            self.assertLess(burst.clock.now, 30.0)
+            parent.poll.return_value = True
+            parent.recv.return_value = child.send.call_args.args[0]
+            monitor.tick(burst.clock.now)
+            self.assertEqual(
+                messages, ["User: alice | TDS estimate: 80.0 ppm | Dispensed: 2.0 mL"]
+            )
+            worker.context.Process.return_value.kill.assert_not_called()
+
+    def test_worker_drops_results_that_finish_at_deadline(self) -> None:
+        clock = Clock()
+        clock.now = 6.0
+        connection = MagicMock()
+        expired_at_pickup = Job(1, 1.0, 6.0)
+        expires_during_work = Job(2, 2.0, 7.0)
+        connection.recv.side_effect = (expired_at_pickup, expires_during_work, EOFError)
+
+        def recognize(_job: Job) -> str:
+            clock.sleep(1.0)
+            return "alice"
+
+        recognize_spy = MagicMock(side_effect=recognize)
+        with (
+            patch("purifier.vision.arduino_worker.signal.signal"),
+            patch("purifier.vision.arduino_worker.resource.setrlimit"),
+            patch("purifier.vision.arduino_worker.time.monotonic", clock.read),
+        ):
+            run_worker(connection, recognize_spy, debug=False)
+        recognize_spy.assert_called_once_with(expires_during_work)
+        connection.send.assert_not_called()
+
     def test_monitor_enables_worker_with_opt_in_vision_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             bench = VisionBench(Path(tmp))
+            bench.raw["recognition_deadline_s"] = 10.0
             for verified in (True, False, None):
                 with self.subTest(verified=verified):
                     bench.raw["shutter"] = (
@@ -287,7 +363,10 @@ class ArduinoVisionTests(unittest.TestCase):
                         self.assertEqual(monitor_main(), 0)
                     self.assertEqual(worker.call_count, int(verified is not False))
                     if worker.called:
-                        self.assertEqual(worker.call_args.kwargs, {"debug": debug})
+                        self.assertEqual(
+                            worker.call_args.kwargs,
+                            {"debug": debug, "recognition_deadline_s": 10.0},
+                        )
 
     def test_automatic_capture_obeys_shutter_and_optional_proximity(self) -> None:
         for blocked_by, expected_frames in (
@@ -335,7 +414,7 @@ class ArduinoVisionTests(unittest.TestCase):
                     burst.capture_array = capture_and_close_shutter
 
                 with bench.dependencies(burst) as model:
-                    user = Recognizer(settings).recognize(0.0)
+                    user = Recognizer(settings).recognize(Job(1, 0.0, 5.0))
                 self.assertIsNone(user)
                 self.assertEqual(len(burst.frames), expected_frames)
                 self.assertEqual(burst.opened, int(expected_frames > 0))
@@ -465,7 +544,9 @@ class ArduinoVisionTests(unittest.TestCase):
     def test_hung_worker_is_killed_at_deadline_and_next_pour_recovers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             marker = Path(tmp) / "capture-entered"
-            worker = RecognitionProcess(HangOnce(marker), debug=True)
+            worker = RecognitionProcess(
+                HangOnce(marker), recognition_deadline_s=10.0, debug=True
+            )
             try:
                 messages: list[str] = []
                 monitor = PourMonitor(messages.append, worker)
@@ -477,10 +558,11 @@ class ArduinoVisionTests(unittest.TestCase):
                 self.assertTrue(marker.exists())
                 for offset in (0.5, 2.0, 3.5):
                     monitor.receive(b",0,2", start + offset)
+                monitor.tick(start + 9.99)
                 self.assertEqual(messages, [])
                 stderr = StringIO()
                 with redirect_stderr(stderr):
-                    monitor.tick(start + 5.0)
+                    monitor.tick(start + 10.0)
                 self.assertIn(
                     "outcome=deadline_expired worker_killed=True", stderr.getvalue()
                 )
@@ -492,7 +574,7 @@ class ArduinoVisionTests(unittest.TestCase):
                 worker.process.join(timeout=3)
                 self.assertFalse(worker.process.is_alive())
 
-                second = max(time.monotonic(), start + 5.0)
+                second = max(time.monotonic(), start + 10.0)
                 monitor.receive(b"90,4,6", second)
                 until = time.monotonic() + 3
                 while worker.job is not None and time.monotonic() < until:
@@ -545,3 +627,30 @@ class ArduinoVisionTests(unittest.TestCase):
             self.assertEqual(store.load(user), [sample] * 3)
             store.delete(user)
             self.assertFalse(encrypted.exists())
+
+    def test_recognition_deadline_config_defaults_and_validates_range(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bench = VisionBench(Path(tmp))
+            self.assertEqual(Settings.load(bench.config).recognition_deadline_s, 5.0)
+            for value in (5, 5.5, 10.0, 20):
+                with self.subTest(value=value):
+                    bench.raw["recognition_deadline_s"] = value
+                    bench.config.write_text(json.dumps(bench.raw))
+                    self.assertEqual(
+                        Settings.load(bench.config).recognition_deadline_s, value
+                    )
+            for value in (
+                4.99,
+                20.01,
+                float("nan"),
+                float("inf"),
+                -float("inf"),
+                True,
+                "10",
+                None,
+            ):
+                with self.subTest(value=value):
+                    bench.raw["recognition_deadline_s"] = value
+                    bench.config.write_text(json.dumps(bench.raw))
+                    with self.assertRaisesRegex(ValueError, "recognition_deadline_s"):
+                        Settings.load(bench.config)

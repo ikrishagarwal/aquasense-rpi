@@ -66,6 +66,8 @@ class Pipeline:
                     frames.append(self.camera.capture())
             finally:
                 self.camera.close()
+            if not self.permission().permitted:
+                return Match("guest", None, "privacy_blocked")
             scoring_at = time.monotonic()
             if self.debug:
                 self.debug(
@@ -100,6 +102,8 @@ class Pipeline:
                     f"embedding_finished duration_ms="
                     f"{(time.monotonic() - embedding_at) * 1000:.0f}"
                 )
+            if not self.permission().permitted:
+                return Match("guest", None, "privacy_blocked")
             result = match(vector, enrolled, self.threshold, self.margin)
             if not self.permission().permitted:
                 return Match("guest", None, "privacy_blocked")
